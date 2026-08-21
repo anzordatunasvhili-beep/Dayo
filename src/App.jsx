@@ -6,10 +6,14 @@ import {
   createPayment,
   createStudent,
   createSubject,
+  deleteLesson,
   getWorkspace,
   markPaymentPaid,
+  updateLesson,
+  updateSubject,
 } from "./lib/api";
 import Auth from "./Auth";
+import EditableSchedule from "./components/EditableSchedule";
 
 const Icon = ({ children, size = 20 }) => (
   <span className="material-symbols-rounded" style={{ fontSize: size }}>
@@ -983,18 +987,40 @@ function PaymentModal({ students, onClose, onSave }) {
     </ModalShell>
   );
 }
-function Subjects({ subjects, groups, onSubject, onGroup, students }) {
+const subjectIcons = [
+  ["calculate", "Math"],
+  ["science", "Physics"],
+  ["translate", "Language"],
+  ["code", "Coding"],
+  ["history_edu", "Literature"],
+  ["biotech", "Biology"],
+  ["public", "Geography"],
+  ["palette", "Art"],
+  ["music_note", "Music"],
+  ["fitness_center", "Sport"],
+  ["psychology", "General"],
+  ["menu_book", "Other"],
+];
+function Subjects({
+  subjects,
+  groups,
+  onSubject,
+  onUpdateSubject,
+  onGroup,
+  students,
+}) {
   const [subjectName, setSubjectName] = useState("");
+  const [subjectIcon, setSubjectIcon] = useState("calculate");
   const [groupName, setGroupName] = useState("");
   return (
     <div className="p-5 md:p-8 max-w-[1400px] mx-auto animate-in">
       <form
         onSubmit={(e) => {
           e.preventDefault();
-          onSubject(subjectName);
+          onSubject({ name: subjectName, icon: subjectIcon });
           setSubjectName("");
         }}
-        className="flex gap-2 mb-5"
+        className="flex flex-wrap gap-2 mb-5"
       >
         <input
           required
@@ -1003,24 +1029,57 @@ function Subjects({ subjects, groups, onSubject, onGroup, students }) {
           className="h-10 px-3 bg-white border border-[#ddd] rounded-xl text-sm"
           placeholder="New subject name"
         />
+        <select
+          value={subjectIcon}
+          onChange={(e) => setSubjectIcon(e.target.value)}
+          className="h-10 px-3 bg-white border border-[#ddd] rounded-xl text-sm"
+        >
+          {subjectIcons.map(([icon, label]) => (
+            <option key={icon} value={icon}>
+              {label}
+            </option>
+          ))}
+        </select>
         <button className="bg-[#30312d] text-white border-0 rounded-xl px-4 text-xs">
           Add subject
         </button>
       </form>
       <div className="grid md:grid-cols-3 gap-4">
         {subjects.length ? (
-          subjects.map((x, i) => (
+          subjects.map((x) => (
             <div
               key={x.id}
               className="bg-white rounded-[22px] border border-[#e5e2dc] p-6"
             >
-              <div className="w-12 h-12 rounded-2xl grid place-items-center mb-8 bg-[#e2ebe5]">
-                <Icon size={24}>
-                  {["calculate", "experiment", "code"][i % 3]}
-                </Icon>
+              <div className="w-12 h-12 rounded-2xl grid place-items-center mb-5 bg-[#e2ebe5]">
+                <Icon size={24}>{x.icon || "menu_book"}</Icon>
               </div>
-              <h3 className="font-semibold">{x.name}</h3>
-              <p className="text-xs text-[#91928a] mt-1">Active subject</p>
+              <input
+                defaultValue={x.name}
+                onBlur={(e) =>
+                  e.target.value.trim() &&
+                  e.target.value !== x.name &&
+                  onUpdateSubject(x.id, { name: e.target.value.trim() })
+                }
+                className="w-full font-semibold bg-transparent border-0 border-b border-transparent focus:border-[#aaa] outline-none"
+                aria-label="Subject name"
+              />
+              <label className="block text-[10px] text-[#91928a] mt-3">
+                ICON
+                <select
+                  value={x.icon || "menu_book"}
+                  onChange={(e) =>
+                    onUpdateSubject(x.id, { icon: e.target.value })
+                  }
+                  className="mt-1 w-full h-9 px-2 bg-[#f3f1ec] border-0 rounded-lg text-xs"
+                >
+                  {subjectIcons.map(([icon, label]) => (
+                    <option key={icon} value={icon}>
+                      {label}
+                    </option>
+                  ))}
+                </select>
+              </label>
             </div>
           ))
         ) : (
@@ -1134,32 +1193,17 @@ export default function App() {
       .filter((p) => p.student_id === s.id && p.status !== "paid")
       .reduce((n, p) => n + Number(p.amount), 0),
   }));
-  const sessionList = data.lessons
-    .map((l) => {
-      const start = new Date(l.starts_at),
-        end = new Date(l.ends_at);
-      return {
-        ...l,
-        day: Math.floor((mondayOf(start) - weekStart) / 86400000),
-        start: start.getHours() + start.getMinutes() / 60,
-        duration: (end - start) / 36e5,
-        title: l.available ? "Available" : l.subject?.name || "Lesson",
-        student: l.student
-          ? `${l.student.first_name} ${l.student.last_name}`
-          : l.group?.name || "Open slot",
-        color: l.available ? "sage" : "blue",
-      };
-    })
-    .filter((l) => l.day >= 0 && l.day < 5);
   const content = {
     dashboard: <Dashboard setPage={setPage} data={data} />,
     schedule: (
-      <Schedule
-        sessions={sessionList}
+      <EditableSchedule
+        lessons={data.lessons}
         students={data.students}
         subjects={data.subjects}
         groups={data.groups}
         onCreate={(v) => act(() => createLesson(v), "Lesson saved")}
+        onUpdate={(id, v) => act(() => updateLesson(id, v), "Lesson updated")}
+        onDelete={(id) => act(() => deleteLesson(id), "Lesson deleted")}
       />
     ),
     students: (
@@ -1187,6 +1231,9 @@ export default function App() {
         groups={data.groups}
         students={data.students}
         onSubject={(name) => act(() => createSubject(name), "Subject added")}
+        onUpdateSubject={(id, values) =>
+          act(() => updateSubject(id, values), "Subject updated")
+        }
         onGroup={(v) => act(() => createGroup(v), "Group created")}
       />
     ),

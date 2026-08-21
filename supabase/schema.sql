@@ -32,7 +32,7 @@ begin
   return new;
 end; $$;
 create trigger on_auth_user_created after insert on auth.users for each row execute function public.handle_new_user();
-create table public.subjects (id uuid primary key default gen_random_uuid(), teacher_id uuid not null references public.profiles(id) on delete cascade, name text not null, color text default 'sage', unique(teacher_id,name));
+create table public.subjects (id uuid primary key default gen_random_uuid(), teacher_id uuid not null references public.profiles(id) on delete cascade, name text not null, color text default 'sage', icon text not null default 'menu_book', unique(teacher_id,name));
 create table public.groups (id uuid primary key default gen_random_uuid(), teacher_id uuid not null references public.profiles(id) on delete cascade, name text not null, subject_id uuid references public.subjects(id) on delete set null, unique(teacher_id,name));
 create table public.student_subjects (student_id uuid references public.profiles(id) on delete cascade, subject_id uuid references public.subjects(id) on delete cascade, lesson_mode public.lesson_mode not null, group_id uuid references public.groups(id) on delete set null, primary key(student_id,subject_id));
 create table public.group_members (group_id uuid references public.groups(id) on delete cascade, student_id uuid references public.profiles(id) on delete cascade, primary key(group_id,student_id));

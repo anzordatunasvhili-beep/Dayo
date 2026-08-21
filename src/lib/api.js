@@ -31,7 +31,7 @@ export async function getWorkspace() {
       db
         .from("lessons")
         .select(
-          "*, subject:subjects(name), student:profiles!lessons_student_id_fkey(first_name,last_name), group:groups(name)",
+          "*, subject:subjects(name,icon), student:profiles!lessons_student_id_fkey(first_name,last_name), group:groups(name)",
         )
         .eq("teacher_id", user.id)
         .order("starts_at"),
@@ -94,14 +94,33 @@ export async function deleteLesson(id) {
   if (error) throw error;
 }
 
-export async function createSubject(name) {
+export async function updateLesson(id, input) {
+  const { data, error } = await requireClient()
+    .from("lessons")
+    .update(input)
+    .eq("id", id)
+    .select()
+    .single();
+  if (error) throw error;
+  return data;
+}
+
+export async function createSubject(input) {
   const db = requireClient();
   const {
     data: { user },
   } = await db.auth.getUser();
   const { error } = await db
     .from("subjects")
-    .insert({ teacher_id: user.id, name });
+    .insert({ teacher_id: user.id, name: input.name, icon: input.icon });
+  if (error) throw error;
+}
+
+export async function updateSubject(id, input) {
+  const { error } = await requireClient()
+    .from("subjects")
+    .update(input)
+    .eq("id", id);
   if (error) throw error;
 }
 
@@ -121,14 +140,12 @@ export async function createGroup(input) {
     .single();
   if (error) throw error;
   if (input.student_ids?.length) {
-    const { error: memberError } = await db
-      .from("group_members")
-      .insert(
-        input.student_ids.map((student_id) => ({
-          group_id: data.id,
-          student_id,
-        })),
-      );
+    const { error: memberError } = await db.from("group_members").insert(
+      input.student_ids.map((student_id) => ({
+        group_id: data.id,
+        student_id,
+      })),
+    );
     if (memberError) throw memberError;
   }
   return data;
