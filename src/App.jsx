@@ -442,7 +442,6 @@ function LessonModal({ onClose, onSave, students, subjects, groups }) {
     available: false,
   });
   const [saving, setSaving] = useState(false);
-  const [error, setError] = useState("");
   return (
     <ModalShell title="Schedule a lesson" onClose={onClose}>
       <form
@@ -669,6 +668,7 @@ function StudentModal({ onClose, onSave, subjects, groups, profile }) {
     password: "",
   });
   const [saving, setSaving] = useState(false);
+  const [error, setError] = useState("");
   const code =
     profile?.studio_code ||
     `${profile?.first_name?.[0] || "T"}${profile?.last_name?.[0] || "R"}`;
