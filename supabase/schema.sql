@@ -48,6 +48,7 @@ create policy "teacher updates students" on public.profiles for update using (id
 create policy "teachers manage subjects" on public.subjects for all using (teacher_id=auth.uid()) with check (teacher_id=auth.uid());
 create policy "students read assigned subjects" on public.subjects for select using (exists(select 1 from student_subjects ss where ss.subject_id=id and ss.student_id=auth.uid()));
 create policy "teachers manage groups" on public.groups for all using (teacher_id=auth.uid()) with check (teacher_id=auth.uid());
+create policy "students read their groups" on public.groups for select using (exists(select 1 from public.group_members gm where gm.group_id=groups.id and gm.student_id=auth.uid()));
 create policy "teachers manage assignments" on public.student_subjects for all using (public.is_teacher_of(student_id)) with check (public.is_teacher_of(student_id));
 create policy "students read assignments" on public.student_subjects for select using (student_id=auth.uid());
 create policy "teachers manage members" on public.group_members for all using (public.is_teacher_of(student_id)) with check (public.is_teacher_of(student_id));

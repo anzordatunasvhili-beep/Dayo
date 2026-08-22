@@ -54,6 +54,8 @@ const colorMap = {
 };
 
 function Sidebar({ page, setPage, open, setOpen, profile }) {
+  const visibleNav =
+    profile?.role === "student" ? nav.filter(([id]) => id !== "students") : nav;
   return (
     <aside
       className={`${open ? "translate-x-0" : "-translate-x-full"} lg:translate-x-0 fixed lg:static inset-y-0 left-0 z-40 w-[260px] bg-[#f5f3ee] border-r border-[#deddd7] flex flex-col transition-transform`}
@@ -79,7 +81,7 @@ function Sidebar({ page, setPage, open, setOpen, profile }) {
         <p className="px-4 text-[10px] tracking-[.15em] text-[#999a92] font-semibold mb-3">
           WORKSPACE
         </p>
-        {nav.map(([id, icon, label]) => (
+        {visibleNav.map(([id, icon, label]) => (
           <button
             key={id}
             onClick={() => {
@@ -89,7 +91,9 @@ function Sidebar({ page, setPage, open, setOpen, profile }) {
             className={`w-full h-11 px-4 mb-1 rounded-xl flex items-center gap-3 border-0 text-sm ${page === id ? "bg-white shadow-[0_3px_14px_rgba(30,30,25,.07)] text-[#20211d] font-semibold" : "bg-transparent text-[#66675f] hover:bg-white/60"}`}
           >
             <Icon>{icon}</Icon>
-            {label}
+            {profile?.role === "student" && id === "subjects"
+              ? "My subjects"
+              : label}
             {id === "payments" && (
               <span className="ml-auto text-[10px] bg-[#e8d7c8] px-2 py-0.5 rounded-full">
                 2 due
@@ -111,7 +115,9 @@ function Sidebar({ page, setPage, open, setOpen, profile }) {
                 ? `${profile.first_name} ${profile.last_name}`
                 : "Teacher"}
             </div>
-            <div className="text-[10px] text-[#989890]">Teacher · Sign out</div>
+            <div className="text-[10px] text-[#989890]">
+              {profile?.role === "student" ? "Student" : "Teacher"} · Sign out
+            </div>
           </div>
           <Icon size={18}>logout</Icon>
         </button>
@@ -126,7 +132,7 @@ function Header({ page, setMenu, profile }) {
     schedule: "Your schedule",
     students: "Students",
     payments: "Payments",
-    subjects: "Subjects & groups",
+    subjects: profile?.role === "student" ? "My subjects" : "Subjects & groups",
   };
   const today = new Intl.DateTimeFormat("en", {
     weekday: "long",
@@ -1132,6 +1138,181 @@ function Subjects({
   );
 }
 
+function StudentDashboard({ data, setPage }) {
+  const upcoming = data.lessons
+    .filter((lesson) => new Date(lesson.starts_at) >= new Date())
+    .slice(0, 4);
+  const due = data.payments
+    .filter((payment) => payment.status !== "paid")
+    .reduce((sum, payment) => sum + Number(payment.amount), 0);
+  return (
+    <div className="p-5 md:p-8 max-w-[1200px] mx-auto animate-in">
+      <div className="grid sm:grid-cols-3 gap-4">
+        <Stat
+          icon="calendar_month"
+          label="Upcoming lessons"
+          value={upcoming.length}
+          note="next sessions"
+          tint="bg-[#e2ebe5]"
+        />
+        <Stat
+          icon="menu_book"
+          label="My subjects"
+          value={data.subjects.length}
+          note="assigned"
+          tint="bg-[#e4e8ef]"
+        />
+        <Stat
+          icon="receipt_long"
+          label="Payment due"
+          value={`$${due.toFixed(2)}`}
+          note="outstanding"
+          tint="bg-[#eee4d5]"
+        />
+      </div>
+      <div className="mt-5 bg-white border border-[#e7e4dd] rounded-[24px] p-6">
+        <div className="flex justify-between items-center mb-4">
+          <div>
+            <h2 className="font-semibold">My next lessons</h2>
+            <p className="text-xs text-[#999] mt-1">
+              Your personal and group schedule
+            </p>
+          </div>
+          <button
+            onClick={() => setPage("schedule")}
+            className="text-xs bg-[#f1efe9] border-0 rounded-xl px-3 py-2"
+          >
+            View schedule
+          </button>
+        </div>
+        {upcoming.length ? (
+          upcoming.map((lesson) => (
+            <div
+              key={lesson.id}
+              className="flex items-center gap-4 py-4 border-t border-[#efede8]"
+            >
+              <div className="w-10 h-10 rounded-xl bg-[#e2ebe5] grid place-items-center">
+                <Icon>{lesson.subject?.icon || "event"}</Icon>
+              </div>
+              <div className="flex-1">
+                <p className="text-sm font-semibold">
+                  {lesson.subject?.name || "Lesson"}
+                </p>
+                <p className="text-xs text-[#999] mt-1">
+                  {new Date(lesson.starts_at).toLocaleString([], {
+                    weekday: "short",
+                    month: "short",
+                    day: "numeric",
+                    hour: "2-digit",
+                    minute: "2-digit",
+                  })}
+                </p>
+              </div>
+            </div>
+          ))
+        ) : (
+          <Empty text="No upcoming lessons." />
+        )}
+      </div>
+    </div>
+  );
+}
+
+function StudentPayments({ payments }) {
+  const due = payments
+    .filter((p) => p.status !== "paid")
+    .reduce((n, p) => n + Number(p.amount), 0);
+  return (
+    <div className="p-5 md:p-8 max-w-[1100px] mx-auto animate-in">
+      <div className="grid sm:grid-cols-2 gap-4 mb-5">
+        <Stat
+          icon="pending_actions"
+          label="Outstanding"
+          value={`$${due.toFixed(2)}`}
+          note="current balance"
+          tint="bg-[#eee0db]"
+        />
+        <Stat
+          icon="receipt_long"
+          label="Invoices"
+          value={payments.length}
+          note="payment history"
+          tint="bg-[#e7e3ee]"
+        />
+      </div>
+      <div className="bg-white rounded-[24px] border border-[#e5e2dc] p-6">
+        <h2 className="font-semibold mb-5">My invoices</h2>
+        {payments.length ? (
+          payments.map((p) => (
+            <div
+              key={p.id}
+              className="flex items-center gap-4 py-4 border-t border-[#efede8]"
+            >
+              <div className="w-10 h-10 rounded-xl bg-[#f0eee8] grid place-items-center">
+                <Icon>receipt</Icon>
+              </div>
+              <div className="flex-1">
+                <p className="text-sm font-semibold">{p.note || "Tuition"}</p>
+                <p className="text-xs text-[#999] mt-1">
+                  Due {new Date(`${p.due_date}T12:00`).toLocaleDateString()}
+                </p>
+              </div>
+              <p className="text-sm font-semibold">
+                {p.currency} {Number(p.amount).toFixed(2)}
+              </p>
+              <span
+                className={`text-[10px] px-2.5 py-1 rounded-full ${p.status === "paid" ? "bg-[#deebe2] text-[#52735d]" : "bg-[#f1dfda] text-[#995848]"}`}
+              >
+                {p.status}
+              </span>
+            </div>
+          ))
+        ) : (
+          <Empty text="No invoices." />
+        )}
+      </div>
+    </div>
+  );
+}
+
+function StudentSubjects({ subjects, groups }) {
+  return (
+    <div className="p-5 md:p-8 max-w-[1100px] mx-auto animate-in">
+      <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-4">
+        {subjects.length ? (
+          subjects.map((subject) => (
+            <div
+              key={subject.id}
+              className="bg-white rounded-[22px] border border-[#e5e2dc] p-6"
+            >
+              <div className="w-12 h-12 rounded-2xl grid place-items-center mb-6 bg-[#e2ebe5]">
+                <Icon size={24}>{subject.icon || "menu_book"}</Icon>
+              </div>
+              <h3 className="font-semibold">{subject.name}</h3>
+              <p className="text-xs text-[#999] mt-1">Assigned subject</p>
+            </div>
+          ))
+        ) : (
+          <Empty text="No subjects assigned yet." />
+        )}
+      </div>
+      {groups.length > 0 && (
+        <div className="mt-5 bg-white rounded-[24px] border border-[#e5e2dc] p-6">
+          <h2 className="font-semibold mb-4">My groups</h2>
+          {groups.map((group) => (
+            <div key={group.id} className="py-3 border-t border-[#eee] text-sm">
+              <b>{group.name}</b>
+              <span className="text-[#999] ml-2">
+                {group.subject?.name || "General"}
+              </span>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 export default function App() {
   const [session, setSession] = useState(undefined);
   const [data, setData] = useState(null);
@@ -1193,7 +1374,7 @@ export default function App() {
       .filter((p) => p.student_id === s.id && p.status !== "paid")
       .reduce((n, p) => n + Number(p.amount), 0),
   }));
-  const content = {
+  const teacherContent = {
     dashboard: <Dashboard setPage={setPage} data={data} />,
     schedule: (
       <EditableSchedule
@@ -1237,7 +1418,26 @@ export default function App() {
         onGroup={(v) => act(() => createGroup(v), "Group created")}
       />
     ),
-  }[page];
+  };
+  const studentContent = {
+    dashboard: <StudentDashboard data={data} setPage={setPage} />,
+    schedule: (
+      <EditableSchedule
+        lessons={data.lessons}
+        students={[]}
+        subjects={data.subjects}
+        groups={data.groups}
+        readOnly
+      />
+    ),
+    payments: <StudentPayments payments={data.payments} />,
+    subjects: <StudentSubjects subjects={data.subjects} groups={data.groups} />,
+  };
+  const content =
+    (data.profile.role === "student" ? studentContent : teacherContent)[page] ||
+    (data.profile.role === "student"
+      ? studentContent.dashboard
+      : teacherContent.dashboard);
   return (
     <div className="min-h-screen lg:h-screen flex bg-[#fbfaf7] lg:p-4 lg:gap-0">
       <Sidebar

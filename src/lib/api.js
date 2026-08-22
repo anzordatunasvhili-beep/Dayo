@@ -14,36 +14,63 @@ export async function getWorkspace() {
     data: { user },
   } = await db.auth.getUser();
   if (!user) throw new Error("You are not signed in.");
-  const [profile, students, subjects, groups, lessons, payments] =
-    await Promise.all([
-      db.from("profiles").select("*").eq("id", user.id).single(),
-      db
-        .from("profiles")
-        .select("*")
-        .eq("teacher_id", user.id)
-        .order("first_name"),
-      db.from("subjects").select("*").eq("teacher_id", user.id).order("name"),
-      db
-        .from("groups")
-        .select("*, subject:subjects(name), members:group_members(student_id)")
-        .eq("teacher_id", user.id)
-        .order("name"),
-      db
-        .from("lessons")
-        .select(
-          "*, subject:subjects!lessons_subject_id_fkey(name,icon), student:profiles!lessons_student_id_fkey(first_name,last_name), group:groups!lessons_group_id_fkey(name), student_audiences:lesson_students!lesson_students_lesson_id_fkey(student_id,student:profiles!lesson_students_student_id_fkey(first_name,last_name)), group_audiences:lesson_groups!lesson_groups_lesson_id_fkey(group_id,group:groups!lesson_groups_group_id_fkey(name))",
-        )
-        .eq("teacher_id", user.id)
-        .order("starts_at"),
-      db
-        .from("payments")
-        .select(
-          "*, student:profiles!payments_student_id_fkey(first_name,last_name)",
-        )
-        .eq("teacher_id", user.id)
-        .order("due_date", { ascending: false }),
-    ]);
-  for (const result of [profile, students, subjects, groups, lessons, payments])
+  const profile = await db
+    .from("profiles")
+    .select("*")
+    .eq("id", user.id)
+    .single();
+  if (profile.error) throw profile.error;
+  const teacher = profile.data.role === "teacher";
+  const lessonSelect =
+    "*, subject:subjects!lessons_subject_id_fkey(name,icon), student:profiles!lessons_student_id_fkey(first_name,last_name), group:groups!lessons_group_id_fkey(name), student_audiences:lesson_students!lesson_students_lesson_id_fkey(student_id,student:profiles!lesson_students_student_id_fkey(first_name,last_name)), group_audiences:lesson_groups!lesson_groups_lesson_id_fkey(group_id,group:groups!lesson_groups_group_id_fkey(name))";
+  const paymentSelect =
+    "*, student:profiles!payments_student_id_fkey(first_name,last_name)";
+  const empty = Promise.resolve({ data: [], error: null });
+  const [students, subjects, groups, lessons, payments] = await Promise.all([
+    teacher
+      ? db
+          .from("profiles")
+          .select("*")
+          .eq("teacher_id", user.id)
+          .order("first_name")
+      : empty,
+    teacher
+      ? db.from("subjects").select("*").eq("teacher_id", user.id).order("name")
+      : db.from("subjects").select("*").order("name"),
+    teacher
+      ? db
+          .from("groups")
+          .select(
+            "*, subject:subjects(name), members:group_members(student_id)",
+          )
+          .eq("teacher_id", user.id)
+          .order("name")
+      : db
+          .from("groups")
+          .select(
+            "*, subject:subjects(name), members:group_members(student_id)",
+          )
+          .order("name"),
+    teacher
+      ? db
+          .from("lessons")
+          .select(lessonSelect)
+          .eq("teacher_id", user.id)
+          .order("starts_at")
+      : db.from("lessons").select(lessonSelect).order("starts_at"),
+    teacher
+      ? db
+          .from("payments")
+          .select(paymentSelect)
+          .eq("teacher_id", user.id)
+          .order("due_date", { ascending: false })
+      : db
+          .from("payments")
+          .select(paymentSelect)
+          .eq("student_id", user.id)
+          .order("due_date", { ascending: false }),
+  ]);
+  for (const result of [students, subjects, groups, lessons, payments])
     if (result.error) throw result.error;
   return {
     user,

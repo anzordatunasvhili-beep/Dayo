@@ -39,6 +39,7 @@ export default function EditableSchedule({
   onCreate,
   onUpdate,
   onDelete,
+  readOnly = false,
 }) {
   const [weekStart, setWeekStart] = useState(() => mondayOf(new Date()));
   const [editing, setEditing] = useState(null);
@@ -129,14 +130,18 @@ export default function EditableSchedule({
           Today
         </button>
         <p className="hidden md:block ml-auto text-[11px] text-[#999]">
-          Drag a lesson to another day or time
+          {readOnly
+            ? "Your confirmed lesson schedule"
+            : "Drag a lesson to another day or time"}
         </p>
-        <button
-          onClick={() => setEditing({})}
-          className="bg-[#30312d] text-white border-0 rounded-xl px-4 h-10 text-xs font-semibold flex items-center gap-2"
-        >
-          <Icon size={17}>add</Icon>New lesson
-        </button>
+        {!readOnly && (
+          <button
+            onClick={() => setEditing({})}
+            className="bg-[#30312d] text-white border-0 rounded-xl px-4 h-10 text-xs font-semibold flex items-center gap-2"
+          >
+            <Icon size={17}>add</Icon>New lesson
+          </button>
+        )}
       </div>
       <div className="bg-white rounded-[24px] border border-[#e4e2dc] overflow-auto">
         <div className="min-w-[1050px]">
@@ -208,15 +213,18 @@ export default function EditableSchedule({
                       : "Open slot";
                     return (
                       <button
-                        draggable
+                        draggable={!readOnly}
                         onDragStart={(e) => {
+                          if (readOnly) return;
                           dragging.current = true;
                           e.dataTransfer.effectAllowed = "move";
                           e.dataTransfer.setData("text/lesson-id", lesson.id);
                         }}
-                        onClick={() => !dragging.current && setEditing(lesson)}
+                        onClick={() =>
+                          !readOnly && !dragging.current && setEditing(lesson)
+                        }
                         key={lesson.id}
-                        className={`absolute left-2 right-2 rounded-xl border text-left p-3 overflow-hidden cursor-grab active:cursor-grabbing hover:shadow-md transition ${colors[index % colors.length]}`}
+                        className={`absolute left-2 right-2 rounded-xl border text-left p-3 overflow-hidden ${readOnly ? "cursor-default" : "cursor-grab active:cursor-grabbing hover:shadow-md"} transition ${colors[index % colors.length]}`}
                         style={{
                           top: (startHour - 7) * 60 + 5,
                           height: Math.max(44, duration * 60 - 8),
