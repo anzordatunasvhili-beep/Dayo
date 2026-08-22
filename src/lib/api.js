@@ -408,10 +408,40 @@ export async function setStudentSubjectPrice(input) {
 }
 
 export async function setLessonStudentRecord(input) {
-  const { error } = await requireClient()
+  const db = requireClient();
+  const { data: existing } = await db
+    .from("lesson_student_records")
+    .select("price_snapshot,currency")
+    .eq("lesson_id", input.lesson_id)
+    .eq("student_id", input.student_id)
+    .maybeSingle();
+  let snapshot = {};
+  if (existing?.price_snapshot != null)
+    snapshot = {
+      price_snapshot: existing.price_snapshot,
+      currency: existing.currency,
+    };
+  else if (["present", "late"].includes(input.attendance)) {
+    const { data: lesson } = await db
+      .from("lessons")
+      .select("subject_id")
+      .eq("id", input.lesson_id)
+      .single();
+    if (lesson?.subject_id) {
+      const { data: rate } = await db
+        .from("student_subject_prices")
+        .select("price,currency")
+        .eq("student_id", input.student_id)
+        .eq("subject_id", lesson.subject_id)
+        .maybeSingle();
+      if (rate)
+        snapshot = { price_snapshot: rate.price, currency: rate.currency };
+    }
+  }
+  const { error } = await db
     .from("lesson_student_records")
     .upsert(
-      { ...input, updated_at: new Date().toISOString() },
+      { ...input, ...snapshot, updated_at: new Date().toISOString() },
       { onConflict: "lesson_id,student_id" },
     );
   if (error) throw error;

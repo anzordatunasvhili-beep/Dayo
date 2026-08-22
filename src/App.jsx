@@ -828,17 +828,68 @@ function StudentModal({ onClose, onSave, subjects, groups, profile }) {
   );
 }
 
+function lessonChargeSummary(students, lessons, prices, payments) {
+  return students.map((student) => {
+    const attended = lessons.flatMap((lesson) =>
+      (lesson.records || [])
+        .filter(
+          (record) =>
+            record.student_id === student.id &&
+            ["present", "late"].includes(record.attendance) &&
+            new Date(lesson.ends_at) <= new Date(),
+        )
+        .map((record) => ({ lesson, record })),
+    );
+    const totals = {};
+    for (const { lesson, record } of attended) {
+      const rate =
+        record.price_snapshot != null
+          ? { price: record.price_snapshot, currency: record.currency || "USD" }
+          : prices.find(
+              (price) =>
+                price.student_id === student.id &&
+                price.subject_id === lesson.subject_id,
+            );
+      if (rate)
+        totals[rate.currency] =
+          (totals[rate.currency] || 0) + Number(rate.price);
+    }
+    for (const payment of payments.filter(
+      (item) => item.student_id === student.id && item.status === "paid",
+    ))
+      totals[payment.currency] =
+        (totals[payment.currency] || 0) - Number(payment.amount);
+    return {
+      student,
+      lessonCount: attended.length,
+      totals: Object.fromEntries(
+        Object.entries(totals).map(([currency, value]) => [
+          currency,
+          Math.max(0, value),
+        ]),
+      ),
+    };
+  });
+}
+
 function Payments({
   payments,
   students,
   subjects,
   prices,
+  lessons,
   onCreate,
   onPaid,
   onPrice,
 }) {
   const [modal, setModal] = useState(false);
   const [priceModal, setPriceModal] = useState(false);
+  const chargeSummary = lessonChargeSummary(
+    students,
+    lessons,
+    prices,
+    payments,
+  );
   const paid = payments
     .filter((p) => p.status === "paid")
     .reduce((n, p) => n + Number(p.amount), 0);
@@ -915,6 +966,44 @@ function Payments({
           note="total"
           tint="bg-[#e7e3ee]"
         />
+      </div>
+      <div className="mb-5 bg-[#30312d] text-white rounded-[24px] p-6">
+        <div className="mb-5">
+          <h2 className="font-semibold">Student lesson balances</h2>
+          <p className="text-xs text-white/50 mt-1">
+            Finished and attended lessons, minus recorded payments
+          </p>
+        </div>
+        <div className="grid md:grid-cols-2 gap-3">
+          {chargeSummary.map(({ student, lessonCount, totals }) => (
+            <div
+              key={student.id}
+              className="rounded-2xl bg-white/5 border border-white/10 p-4 flex items-center"
+            >
+              <div className="flex-1">
+                <p className="text-sm font-semibold">
+                  {student.first_name} {student.last_name}
+                </p>
+                <p className="text-[10px] text-white/45 mt-1">
+                  {lessonCount} attended completed lesson
+                  {lessonCount === 1 ? "" : "s"}
+                </p>
+              </div>
+              <div className="text-right">
+                {Object.keys(totals).length ? (
+                  Object.entries(totals).map(([currency, value]) => (
+                    <p key={currency} className="text-sm font-semibold">
+                      {currency} {value.toFixed(2)}
+                    </p>
+                  ))
+                ) : (
+                  <p className="text-xs text-white/40">No charges</p>
+                )}
+                <p className="text-[9px] text-white/40 mt-1">TO PAY</p>
+              </div>
+            </div>
+          ))}
+        </div>
       </div>
       <div className="bg-white rounded-[24px] border border-[#e5e2dc] p-6">
         <h2 className="font-semibold mb-5">Invoices</h2>
@@ -1519,10 +1608,16 @@ function StudentDashboard({ data, setPage }) {
   );
 }
 
-function StudentPayments({ payments }) {
+function StudentPayments({ payments, lessons, prices, profile }) {
   const due = payments
     .filter((p) => p.status !== "paid")
     .reduce((n, p) => n + Number(p.amount), 0);
+  const calculated = lessonChargeSummary(
+    [profile],
+    lessons,
+    prices,
+    payments,
+  )[0];
   return (
     <div className="p-5 md:p-8 max-w-[1100px] mx-auto animate-in">
       <div className="grid sm:grid-cols-2 gap-4 mb-5">
@@ -1540,6 +1635,23 @@ function StudentPayments({ payments }) {
           note="payment history"
           tint="bg-[#e7e3ee]"
         />
+      </div>
+      <div className="mb-5 bg-[#30312d] text-white rounded-[24px] p-6 flex items-center">
+        <div className="flex-1">
+          <p className="text-xs text-white/45">ATTENDED LESSON BALANCE</p>
+          <h2 className="text-xl font-semibold mt-2">Amount to pay</h2>
+          <p className="text-xs text-white/45 mt-1">
+            {calculated.lessonCount} completed attended lesson
+            {calculated.lessonCount === 1 ? "" : "s"}
+          </p>
+        </div>
+        <div className="text-right">
+          {Object.entries(calculated.totals).map(([currency, value]) => (
+            <p key={currency} className="text-xl font-semibold">
+              {currency} {value.toFixed(2)}
+            </p>
+          ))}
+        </div>
       </div>
       <div className="bg-white rounded-[24px] border border-[#e5e2dc] p-6">
         <h2 className="font-semibold mb-5">My invoices</h2>
@@ -1730,6 +1842,7 @@ export default function App() {
         students={data.students}
         subjects={data.subjects}
         prices={data.prices}
+        lessons={data.lessons}
         onCreate={(v) => act(() => createPayment(v), "Invoice created")}
         onPaid={(id) =>
           act(() => markPaymentPaid(id), "Payment marked as paid")
@@ -1767,7 +1880,14 @@ export default function App() {
         readOnly
       />
     ),
-    payments: <StudentPayments payments={data.payments} />,
+    payments: (
+      <StudentPayments
+        payments={data.payments}
+        lessons={data.lessons}
+        prices={data.prices}
+        profile={data.profile}
+      />
+    ),
     subjects: <StudentSubjects subjects={data.subjects} groups={data.groups} />,
   };
   const content =
