@@ -848,20 +848,17 @@ function StudentModal({ onClose, onSave, subjects, groups, profile }) {
 
 function lessonChargeSummary(students, lessons, prices, payments) {
   return students.map((student) => {
-    const completedAttended = lessons.flatMap((lesson) =>
+    const trackedLessons = lessons.flatMap((lesson) =>
       (lesson.records || [])
         .filter(
           (record) =>
-            record.student_id === student.id &&
-            ["present", "late"].includes(record.attendance) &&
-            new Date(lesson.ends_at) <= new Date(),
+            record.student_id === student.id && record.billable !== false,
         )
         .map((record) => ({ lesson, record })),
     );
-    const attended = completedAttended.filter(
-      ({ record }) => record.billable !== false && !record.paid,
-    );
+    const attended = trackedLessons.filter(({ record }) => !record.paid);
     const totals = {};
+    let missingPriceCount = 0;
     for (const { lesson, record } of attended) {
       const rate =
         record.price_snapshot != null
@@ -874,6 +871,7 @@ function lessonChargeSummary(students, lessons, prices, payments) {
       if (rate)
         totals[rate.currency] =
           (totals[rate.currency] || 0) + Number(rate.price);
+      else missingPriceCount++;
     }
     for (const payment of payments.filter(
       (item) => item.student_id === student.id && item.status === "paid",
@@ -883,8 +881,9 @@ function lessonChargeSummary(students, lessons, prices, payments) {
     return {
       student,
       lessonCount: attended.length,
-      paidLessonCount: completedAttended.filter(({ record }) => record.paid)
+      paidLessonCount: trackedLessons.filter(({ record }) => record.paid)
         .length,
+      missingPriceCount,
       totals: Object.fromEntries(
         Object.entries(totals).map(([currency, value]) => [
           currency,
@@ -1109,7 +1108,13 @@ function Payments({
         </div>
         <div className="grid md:grid-cols-2 gap-3">
           {chargeSummary.map(
-            ({ student, lessonCount, paidLessonCount, totals }) => (
+            ({
+              student,
+              lessonCount,
+              paidLessonCount,
+              missingPriceCount,
+              totals,
+            }) => (
               <div
                 key={student.id}
                 className="rounded-2xl bg-white/5 border border-white/10 p-4 flex items-center"
@@ -1120,6 +1125,9 @@ function Payments({
                   </p>
                   <p className="text-[10px] text-white/45 mt-1">
                     {lessonCount} payable · {paidLessonCount} marked paid
+                    {missingPriceCount
+                      ? ` · ${missingPriceCount} missing price`
+                      : ""}
                   </p>
                 </div>
                 <div className="text-right">

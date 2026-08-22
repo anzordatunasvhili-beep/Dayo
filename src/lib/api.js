@@ -155,15 +155,13 @@ export async function updateStudent(id, input) {
     .eq("student_id", id);
   if (assignmentDelete) throw assignmentDelete;
   if (subject_ids.length) {
-    const { error: assignmentError } = await db
-      .from("student_subjects")
-      .insert(
-        subject_ids.map((subject_id) => ({
-          student_id: id,
-          subject_id,
-          lesson_mode: "individual",
-        })),
-      );
+    const { error: assignmentError } = await db.from("student_subjects").insert(
+      subject_ids.map((subject_id) => ({
+        student_id: id,
+        subject_id,
+        lesson_mode: "individual",
+      })),
+    );
     if (assignmentError) throw assignmentError;
   }
   const { error: memberDelete } = await db
@@ -465,7 +463,7 @@ export async function setLessonStudentRecord(input) {
       price_snapshot: existing.price_snapshot,
       currency: existing.currency,
     };
-  else if (["present", "late"].includes(input.attendance)) {
+  else if (input.billable) {
     const { data: lesson } = await db
       .from("lessons")
       .select("subject_id")
