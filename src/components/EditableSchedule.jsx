@@ -30,6 +30,48 @@ const timeValue = (value) =>
     hour: "2-digit",
     minute: "2-digit",
   });
+const overlaps = (aStart, aEnd, bStart, bEnd) => aStart < bEnd && aEnd > bStart;
+const zoneOccurrence = (zone, day) => {
+  const source = new Date(zone.starts_at);
+  const start = new Date(day);
+  start.setHours(source.getHours(), source.getMinutes(), 0, 0);
+  const duration = new Date(zone.ends_at) - source;
+  return {
+    ...zone,
+    starts_at: start.toISOString(),
+    ends_at: new Date(start.getTime() + duration).toISOString(),
+  };
+};
+const isBlocked = (startsAt, endsAt, zones) => {
+  const start = new Date(startsAt),
+    end = new Date(endsAt);
+  return zones.some((zone) => {
+    if (!zone.recurring_weekly)
+      return overlaps(
+        start,
+        end,
+        new Date(zone.starts_at),
+        new Date(zone.ends_at),
+      );
+    for (const offset of [-1, 0]) {
+      const day = new Date(start);
+      day.setDate(day.getDate() + offset);
+      if (day.getDay() === new Date(zone.starts_at).getDay()) {
+        const occurrence = zoneOccurrence(zone, day);
+        if (
+          overlaps(
+            start,
+            end,
+            new Date(occurrence.starts_at),
+            new Date(occurrence.ends_at),
+          )
+        )
+          return true;
+      }
+    }
+    return false;
+  });
+};
 
 export default function EditableSchedule({
   lessons,
@@ -40,18 +82,25 @@ export default function EditableSchedule({
   onUpdate,
   onDelete,
   readOnly = false,
+  redZones = [],
+  onCreateRedZone,
+  onUpdateRedZone,
+  onDeleteRedZone,
+  onTrack,
 }) {
   const [weekStart, setWeekStart] = useState(() => mondayOf(new Date()));
   const [editing, setEditing] = useState(null);
   const [pendingMove, setPendingMove] = useState(null);
   const [dragMotion, setDragMotion] = useState(null);
+  const [editingZone, setEditingZone] = useState(null);
+  const [moveError, setMoveError] = useState("");
   const [hourHeight, setHourHeight] = useState(40);
   const calendarBody = useRef(null);
   const dragging = useRef(false);
   useEffect(() => {
     const fit = () =>
       setHourHeight(
-        Math.max(24, Math.min(48, (window.innerHeight - 250) / 15)),
+        Math.max(22, Math.min(46, (window.innerHeight - 250) / 16)),
       );
     fit();
     window.addEventListener("resize", fit);
@@ -107,7 +156,7 @@ export default function EditableSchedule({
       const minuteOffset = Math.max(
         0,
         Math.min(
-          14 * 60,
+          15 * 60,
           Math.round((((event.clientY - rect.top) / hourHeight) * 60) / 15) *
             15,
         ),
@@ -122,11 +171,16 @@ export default function EditableSchedule({
       const duration =
         new Date(dragMotion.lesson.ends_at) -
         new Date(dragMotion.lesson.starts_at);
-      setPendingMove({
-        lesson: dragMotion.lesson,
-        starts_at: start.toISOString(),
-        ends_at: new Date(start.getTime() + duration).toISOString(),
-      });
+      const endsAt = new Date(start.getTime() + duration).toISOString();
+      if (isBlocked(start.toISOString(), endsAt, redZones)) {
+        setMoveError("That time is inside a teacher red zone.");
+        setTimeout(() => setMoveError(""), 3500);
+      } else
+        setPendingMove({
+          lesson: dragMotion.lesson,
+          starts_at: start.toISOString(),
+          ends_at: endsAt,
+        });
     }
     setDragMotion(null);
     setTimeout(() => {
@@ -178,6 +232,14 @@ export default function EditableSchedule({
         </p>
         {!readOnly && (
           <button
+            onClick={() => setEditingZone({})}
+            className="h-10 px-4 rounded-xl border border-[#dfb9b0] bg-[#f6e7e3] text-[#944f42] text-xs font-semibold flex items-center gap-2"
+          >
+            <Icon size={17}>block</Icon>Red zone
+          </button>
+        )}
+        {!readOnly && (
+          <button
             onClick={() => setEditing({})}
             className="bg-[#30312d] text-white border-0 rounded-xl px-4 h-10 text-xs font-semibold flex items-center gap-2"
           >
@@ -209,12 +271,12 @@ export default function EditableSchedule({
             ref={calendarBody}
             className="grid grid-cols-[70px_repeat(7,1fr)] bg-[linear-gradient(to_bottom,#eeece7_1px,transparent_1px)]"
             style={{
-              height: hourHeight * 15,
+              height: hourHeight * 16,
               backgroundSize: `100% ${hourHeight}px`,
             }}
           >
             <div>
-              {Array.from({ length: 15 }, (_, i) => (
+              {Array.from({ length: 16 }, (_, i) => (
                 <div
                   key={i}
                   style={{ height: hourHeight }}
@@ -229,6 +291,56 @@ export default function EditableSchedule({
                 key={day.toISOString()}
                 className="relative border-l border-[#eeece7]"
               >
+                {redZones
+                  .map((zone) =>
+                    zone.recurring_weekly
+                      ? new Date(zone.starts_at).getDay() === day.getDay()
+                        ? zoneOccurrence(zone, day)
+                        : null
+                      : new Date(zone.starts_at).toDateString() ===
+                          day.toDateString()
+                        ? zone
+                        : null,
+                  )
+                  .filter(Boolean)
+                  .map((zone) => {
+                    const start = new Date(zone.starts_at),
+                      end = new Date(zone.ends_at);
+                    const startHour =
+                      start.getHours() + start.getMinutes() / 60;
+                    const duration = (end - start) / 36e5;
+                    return (
+                      <button
+                        key={`${zone.id}-${day.toISOString()}`}
+                        onClick={() =>
+                          !readOnly &&
+                          setEditingZone(
+                            redZones.find((item) => item.id === zone.id),
+                          )
+                        }
+                        className="absolute left-1 right-1 z-0 rounded-lg border border-[#d99c91] bg-[repeating-linear-gradient(135deg,#f4d9d4,#f4d9d4_6px,#efd0ca_6px,#efd0ca_12px)] p-2 text-left overflow-hidden"
+                        style={{
+                          top: Math.max(0, (startHour - 7) * hourHeight) + 2,
+                          height: Math.max(
+                            24,
+                            Math.min(
+                              duration * hourHeight,
+                              (23 - Math.max(7, startHour)) * hourHeight,
+                            ) - 4,
+                          ),
+                        }}
+                      >
+                        <div className="flex items-center gap-1 text-[10px] font-semibold text-[#8f463a]">
+                          <Icon size={13}>block</Icon>
+                          {zone.label}
+                        </div>
+                        <div className="text-[9px] text-[#a26055] mt-1">
+                          {timeValue(start)}–{timeValue(end)}
+                          {zone.recurring_weekly ? " · weekly" : ""}
+                        </div>
+                      </button>
+                    );
+                  })}
                 {visible
                   .filter(
                     (lesson) =>
@@ -322,6 +434,7 @@ export default function EditableSchedule({
           students={students}
           subjects={subjects}
           groups={groups}
+          redZones={redZones}
           onClose={() => setEditing(null)}
           onSave={async (value) => {
             editing.id
@@ -334,6 +447,28 @@ export default function EditableSchedule({
               ? async (scope) => {
                   await onDelete(editing.id, scope);
                   setEditing(null);
+                }
+              : null
+          }
+          onTrack={onTrack}
+        />
+      )}
+      {editingZone && (
+        <RedZoneEditor
+          zone={editingZone.id ? editingZone : null}
+          initialDate={editingZone.id ? null : weekDays[0]}
+          onClose={() => setEditingZone(null)}
+          onSave={async (values) => {
+            editingZone.id
+              ? await onUpdateRedZone(editingZone.id, values)
+              : await onCreateRedZone(values);
+            setEditingZone(null);
+          }}
+          onDelete={
+            editingZone.id
+              ? async () => {
+                  await onDeleteRedZone(editingZone.id);
+                  setEditingZone(null);
                 }
               : null
           }
@@ -355,6 +490,11 @@ export default function EditableSchedule({
             setPendingMove(null);
           }}
         />
+      )}
+      {moveError && (
+        <div className="fixed bottom-6 right-6 z-[70] bg-[#9a4d41] text-white px-5 py-3 rounded-xl shadow-xl text-sm">
+          {moveError}
+        </div>
       )}
     </div>
   );
@@ -397,9 +537,11 @@ function LessonEditor({
   students,
   subjects,
   groups,
+  redZones,
   onClose,
   onSave,
   onDelete,
+  onTrack,
 }) {
   const initialStudentIds =
     lesson?.student_audiences?.map((item) => item.student_id) ||
@@ -433,6 +575,8 @@ function LessonEditor({
         throw new Error("Select at least one student or group.");
       const start = new Date(`${form.date}T${form.time}`);
       const end = new Date(start.getTime() + Number(form.duration) * 60000);
+      if (isBlocked(start.toISOString(), end.toISOString(), redZones))
+        throw new Error("This lesson overlaps a teacher red zone.");
       const data = {
         subject_id: form.subject_id || null,
         student_ids: form.available ? [] : form.student_ids,
@@ -564,6 +708,14 @@ function LessonEditor({
             </select>
           </Field>
         )}
+        {lesson && (
+          <TrackingPanel
+            lesson={lesson}
+            students={students}
+            groups={groups}
+            onTrack={onTrack}
+          />
+        )}
         {error && (
           <p className="mb-3 text-xs text-[#a35645] bg-[#f3e3de] rounded-xl p-3">
             {error}
@@ -671,6 +823,237 @@ function AudiencePicker({
         </div>
       </div>
     </div>
+  );
+}
+
+function TrackingPanel({ lesson, students, groups, onTrack }) {
+  const direct = (lesson.student_audiences || []).map(
+    (item) => item.student_id,
+  );
+  if (lesson.student_id) direct.push(lesson.student_id);
+  const groupIds = (lesson.group_audiences || []).map((item) => item.group_id);
+  if (lesson.group_id) groupIds.push(lesson.group_id);
+  const memberIds = groups
+    .filter((group) => groupIds.includes(group.id))
+    .flatMap((group) =>
+      (group.members || []).map((member) => member.student_id),
+    );
+  const ids = [...new Set([...direct, ...memberIds])];
+  const attendees = students.filter((student) => ids.includes(student.id));
+  const initial = Object.fromEntries(
+    attendees.map((student) => {
+      const saved = (lesson.records || []).find(
+        (record) => record.student_id === student.id,
+      );
+      return [
+        student.id,
+        {
+          attendance: saved?.attendance || "unknown",
+          homework: saved?.homework || "none",
+          homework_note: saved?.homework_note || "",
+        },
+      ];
+    }),
+  );
+  const [records, setRecords] = useState(initial);
+  const change = (studentId, field, value) => {
+    const next = { ...records[studentId], [field]: value };
+    setRecords({ ...records, [studentId]: next });
+    onTrack({ lesson_id: lesson.id, student_id: studentId, ...next });
+  };
+  if (!attendees.length) return null;
+  return (
+    <div className="mb-5 rounded-2xl border border-[#dedbd3] bg-white p-4">
+      <div className="mb-3">
+        <p className="text-xs font-semibold">Attendance & homework</p>
+        <p className="text-[10px] text-[#999] mt-1">
+          Tracked separately for every student
+        </p>
+      </div>
+      <div className="space-y-3">
+        {attendees.map((student) => (
+          <div key={student.id} className="rounded-xl bg-[#f5f3ee] p-3">
+            <p className="text-xs font-semibold mb-2">
+              {student.first_name} {student.last_name}
+            </p>
+            <div className="grid sm:grid-cols-2 gap-2">
+              <select
+                className="h-9 rounded-lg border border-[#ddd] bg-white px-2 text-xs"
+                value={records[student.id].attendance}
+                onChange={(e) =>
+                  change(student.id, "attendance", e.target.value)
+                }
+              >
+                <option value="unknown">Attendance not set</option>
+                <option value="present">Present</option>
+                <option value="absent">Absent</option>
+                <option value="late">Late</option>
+                <option value="excused">Excused</option>
+              </select>
+              <select
+                className="h-9 rounded-lg border border-[#ddd] bg-white px-2 text-xs"
+                value={records[student.id].homework}
+                onChange={(e) => change(student.id, "homework", e.target.value)}
+              >
+                <option value="none">No homework</option>
+                <option value="assigned">Assigned</option>
+                <option value="submitted">Submitted</option>
+                <option value="completed">Completed</option>
+                <option value="missing">Missing</option>
+              </select>
+            </div>
+            <input
+              className="mt-2 w-full h-9 rounded-lg border border-[#ddd] bg-white px-2 text-xs"
+              placeholder="Homework note"
+              value={records[student.id].homework_note}
+              onChange={(e) =>
+                setRecords({
+                  ...records,
+                  [student.id]: {
+                    ...records[student.id],
+                    homework_note: e.target.value,
+                  },
+                })
+              }
+              onBlur={() =>
+                change(
+                  student.id,
+                  "homework_note",
+                  records[student.id].homework_note,
+                )
+              }
+            />
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function RedZoneEditor({ zone, initialDate, onClose, onSave, onDelete }) {
+  const defaultStart =
+    zone?.starts_at || new Date(initialDate || new Date()).setHours(7, 0, 0, 0);
+  const defaultEnd =
+    zone?.ends_at || new Date(initialDate || new Date()).setHours(9, 0, 0, 0);
+  const [form, setForm] = useState({
+    label: zone?.label || "Unavailable",
+    date: dateValue(defaultStart),
+    start: timeValue(defaultStart),
+    endDate: dateValue(defaultEnd),
+    end: timeValue(defaultEnd),
+    recurring_weekly: zone?.recurring_weekly || false,
+  });
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState("");
+  return (
+    <Modal title={zone ? "Edit red zone" : "Add red zone"} onClose={onClose}>
+      <form
+        onSubmit={async (e) => {
+          e.preventDefault();
+          setSaving(true);
+          setError("");
+          try {
+            const starts_at = new Date(
+              `${form.date}T${form.start}`,
+            ).toISOString();
+            const ends_at = new Date(
+              `${form.endDate}T${form.end}`,
+            ).toISOString();
+            if (new Date(ends_at) <= new Date(starts_at))
+              throw new Error("End time must be after start time.");
+            await onSave({
+              label: form.label,
+              starts_at,
+              ends_at,
+              recurring_weekly: form.recurring_weekly,
+            });
+          } catch (requestError) {
+            setError(requestError.message);
+            setSaving(false);
+          }
+        }}
+      >
+        <Field label="Label">
+          <input
+            required
+            className={inputClass}
+            value={form.label}
+            onChange={(e) => setForm({ ...form, label: e.target.value })}
+            placeholder="Night shift, morning shift…"
+          />
+        </Field>
+        <div className="grid grid-cols-2 gap-3">
+          <Field label="Start date">
+            <input
+              required
+              type="date"
+              className={inputClass}
+              value={form.date}
+              onChange={(e) => setForm({ ...form, date: e.target.value })}
+            />
+          </Field>
+          <Field label="Start time">
+            <input
+              required
+              type="time"
+              className={inputClass}
+              value={form.start}
+              onChange={(e) => setForm({ ...form, start: e.target.value })}
+            />
+          </Field>
+          <Field label="End date">
+            <input
+              required
+              type="date"
+              className={inputClass}
+              value={form.endDate}
+              onChange={(e) => setForm({ ...form, endDate: e.target.value })}
+            />
+          </Field>
+          <Field label="End time">
+            <input
+              required
+              type="time"
+              className={inputClass}
+              value={form.end}
+              onChange={(e) => setForm({ ...form, end: e.target.value })}
+            />
+          </Field>
+        </div>
+        <label className="flex items-center gap-2 text-xs mb-5">
+          <input
+            type="checkbox"
+            checked={form.recurring_weekly}
+            onChange={(e) =>
+              setForm({ ...form, recurring_weekly: e.target.checked })
+            }
+          />
+          Repeat every week on this weekday
+        </label>
+        {error && (
+          <p className="mb-3 text-xs text-[#a35645] bg-[#f3e3de] rounded-xl p-3">
+            {error}
+          </p>
+        )}
+        <div className="flex gap-3">
+          {onDelete && (
+            <button
+              type="button"
+              onClick={() => confirm("Delete this red zone?") && onDelete()}
+              className="h-11 px-4 rounded-xl border border-[#dabfb6] bg-[#f6e7e3] text-[#995848] text-sm"
+            >
+              Delete
+            </button>
+          )}
+          <button
+            disabled={saving}
+            className="ml-auto h-11 px-5 rounded-xl border-0 bg-[#30312d] text-white text-sm font-semibold"
+          >
+            {saving ? "Saving…" : "Save red zone"}
+          </button>
+        </div>
+      </form>
+    </Modal>
   );
 }
 

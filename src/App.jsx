@@ -6,6 +6,7 @@ import {
   createPayment,
   createStudent,
   createSubject,
+  createRedZone,
   deleteLesson,
   deleteLessonScope,
   getWorkspace,
@@ -14,6 +15,10 @@ import {
   updateLessonScope,
   updateSubject,
   updateGroup,
+  updateRedZone,
+  deleteRedZone,
+  setStudentSubjectPrice,
+  setLessonStudentRecord,
 } from "./lib/api";
 import Auth from "./Auth";
 import EditableSchedule from "./components/EditableSchedule";
@@ -823,8 +828,17 @@ function StudentModal({ onClose, onSave, subjects, groups, profile }) {
   );
 }
 
-function Payments({ payments, students, onCreate, onPaid }) {
+function Payments({
+  payments,
+  students,
+  subjects,
+  prices,
+  onCreate,
+  onPaid,
+  onPrice,
+}) {
   const [modal, setModal] = useState(false);
+  const [priceModal, setPriceModal] = useState(false);
   const paid = payments
     .filter((p) => p.status === "paid")
     .reduce((n, p) => n + Number(p.amount), 0);
@@ -835,11 +849,49 @@ function Payments({ payments, students, onCreate, onPaid }) {
     <div className="p-5 md:p-8 max-w-[1400px] mx-auto animate-in">
       <div className="flex justify-end mb-4">
         <button
+          onClick={() => setPriceModal(true)}
+          className="h-10 px-4 mr-2 bg-white border border-[#ddd] rounded-xl text-xs flex items-center gap-2"
+        >
+          <Icon size={17}>sell</Icon>Set lesson price
+        </button>
+        <button
           onClick={() => setModal(true)}
           className="h-10 px-4 bg-[#30312d] text-white border-0 rounded-xl text-xs flex items-center gap-2"
         >
           <Icon size={17}>add</Icon>New invoice
         </button>
+      </div>
+      <div className="mt-5 bg-white rounded-[24px] border border-[#e5e2dc] p-6">
+        <div className="flex justify-between items-center mb-4">
+          <div>
+            <h2 className="font-semibold">Individual lesson prices</h2>
+            <p className="text-xs text-[#999] mt-1">
+              Price per lesson, subject and student
+            </p>
+          </div>
+        </div>
+        {prices.length ? (
+          <div className="grid md:grid-cols-2 gap-x-6">
+            {prices.map((price) => (
+              <div
+                key={`${price.student_id}-${price.subject_id}`}
+                className="flex items-center py-3 border-t border-[#eee]"
+              >
+                <div className="flex-1">
+                  <p className="text-sm font-semibold">
+                    {price.student?.first_name} {price.student?.last_name}
+                  </p>
+                  <p className="text-xs text-[#999]">{price.subject?.name}</p>
+                </div>
+                <b className="text-sm">
+                  {price.currency} {Number(price.price).toFixed(2)}
+                </b>
+              </div>
+            ))}
+          </div>
+        ) : (
+          <Empty text="No individual prices assigned." />
+        )}
       </div>
       <div className="grid sm:grid-cols-3 gap-4 mb-5">
         <Stat
@@ -915,7 +967,92 @@ function Payments({ payments, students, onCreate, onPaid }) {
           }}
         />
       )}
+      {priceModal && (
+        <PriceModal
+          students={students}
+          subjects={subjects}
+          onClose={() => setPriceModal(false)}
+          onSave={async (value) => {
+            await onPrice(value);
+            setPriceModal(false);
+          }}
+        />
+      )}
     </div>
+  );
+}
+function PriceModal({ students, subjects, onClose, onSave }) {
+  const [form, setForm] = useState({
+    student_id: students[0]?.id || "",
+    subject_id: subjects[0]?.id || "",
+    price: "",
+    currency: "USD",
+  });
+  return (
+    <ModalShell title="Set lesson price" onClose={onClose}>
+      <form
+        onSubmit={(e) => {
+          e.preventDefault();
+          onSave({ ...form, price: Number(form.price) });
+        }}
+      >
+        <Field label="Student">
+          <select
+            required
+            className={inputClass}
+            value={form.student_id}
+            onChange={(e) => setForm({ ...form, student_id: e.target.value })}
+          >
+            {students.map((student) => (
+              <option key={student.id} value={student.id}>
+                {student.first_name} {student.last_name}
+              </option>
+            ))}
+          </select>
+        </Field>
+        <Field label="Subject">
+          <select
+            required
+            className={inputClass}
+            value={form.subject_id}
+            onChange={(e) => setForm({ ...form, subject_id: e.target.value })}
+          >
+            {subjects.map((subject) => (
+              <option key={subject.id} value={subject.id}>
+                {subject.name}
+              </option>
+            ))}
+          </select>
+        </Field>
+        <div className="grid grid-cols-2 gap-3">
+          <Field label="Price per lesson">
+            <input
+              required
+              min="0"
+              step="0.01"
+              type="number"
+              className={inputClass}
+              value={form.price}
+              onChange={(e) => setForm({ ...form, price: e.target.value })}
+            />
+          </Field>
+          <Field label="Currency">
+            <select
+              className={inputClass}
+              value={form.currency}
+              onChange={(e) => setForm({ ...form, currency: e.target.value })}
+            >
+              <option>USD</option>
+              <option>GEL</option>
+              <option>EUR</option>
+            </select>
+          </Field>
+        </div>
+        <button className="w-full h-11 rounded-xl border-0 bg-[#30312d] text-white text-sm font-semibold">
+          Save price
+        </button>
+      </form>
+    </ModalShell>
   );
 }
 function PaymentModal({ students, onClose, onSave }) {
@@ -1546,6 +1683,7 @@ export default function App() {
         students={data.students}
         subjects={data.subjects}
         groups={data.groups}
+        redZones={data.redZones}
         onCreate={(v) => act(() => createLesson(v), "Lesson saved")}
         onUpdate={(id, v, scope) =>
           act(
@@ -1563,6 +1701,18 @@ export default function App() {
               : "Repeated lessons deleted",
           )
         }
+        onCreateRedZone={(values) =>
+          act(() => createRedZone(values), "Red zone added")
+        }
+        onUpdateRedZone={(id, values) =>
+          act(() => updateRedZone(id, values), "Red zone updated")
+        }
+        onDeleteRedZone={(id) =>
+          act(() => deleteRedZone(id), "Red zone deleted")
+        }
+        onTrack={(values) =>
+          act(() => setLessonStudentRecord(values), "Tracking updated")
+        }
       />
     ),
     students: (
@@ -1578,9 +1728,14 @@ export default function App() {
       <Payments
         payments={data.payments}
         students={data.students}
+        subjects={data.subjects}
+        prices={data.prices}
         onCreate={(v) => act(() => createPayment(v), "Invoice created")}
         onPaid={(id) =>
           act(() => markPaymentPaid(id), "Payment marked as paid")
+        }
+        onPrice={(values) =>
+          act(() => setStudentSubjectPrice(values), "Lesson price saved")
         }
       />
     ),
@@ -1608,6 +1763,7 @@ export default function App() {
         students={[]}
         subjects={data.subjects}
         groups={data.groups}
+        redZones={data.redZones}
         readOnly
       />
     ),

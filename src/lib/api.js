@@ -22,55 +22,86 @@ export async function getWorkspace() {
   if (profile.error) throw profile.error;
   const teacher = profile.data.role === "teacher";
   const lessonSelect =
-    "*, subject:subjects!lessons_subject_id_fkey(name,icon), student:profiles!lessons_student_id_fkey(first_name,last_name), group:groups!lessons_group_id_fkey(name), student_audiences:lesson_students!lesson_students_lesson_id_fkey(student_id,student:profiles!lesson_students_student_id_fkey(first_name,last_name)), group_audiences:lesson_groups!lesson_groups_lesson_id_fkey(group_id,group:groups!lesson_groups_group_id_fkey(name))";
+    "*, subject:subjects!lessons_subject_id_fkey(name,icon), student:profiles!lessons_student_id_fkey(first_name,last_name), group:groups!lessons_group_id_fkey(name), student_audiences:lesson_students!lesson_students_lesson_id_fkey(student_id,student:profiles!lesson_students_student_id_fkey(first_name,last_name)), group_audiences:lesson_groups!lesson_groups_lesson_id_fkey(group_id,group:groups!lesson_groups_group_id_fkey(name)), records:lesson_student_records(student_id,attendance,homework,homework_note,price_snapshot,currency)";
   const paymentSelect =
     "*, student:profiles!payments_student_id_fkey(first_name,last_name)";
   const empty = Promise.resolve({ data: [], error: null });
-  const [students, subjects, groups, lessons, payments] = await Promise.all([
-    teacher
-      ? db
-          .from("profiles")
-          .select("*")
-          .eq("teacher_id", user.id)
-          .order("first_name")
-      : empty,
-    teacher
-      ? db.from("subjects").select("*").eq("teacher_id", user.id).order("name")
-      : db.from("subjects").select("*").order("name"),
-    teacher
-      ? db
-          .from("groups")
-          .select(
-            "*, subject:subjects(name), members:group_members(student_id)",
-          )
-          .eq("teacher_id", user.id)
-          .order("name")
-      : db
-          .from("groups")
-          .select(
-            "*, subject:subjects(name), members:group_members(student_id)",
-          )
-          .order("name"),
-    teacher
-      ? db
-          .from("lessons")
-          .select(lessonSelect)
-          .eq("teacher_id", user.id)
-          .order("starts_at")
-      : db.from("lessons").select(lessonSelect).order("starts_at"),
-    teacher
-      ? db
-          .from("payments")
-          .select(paymentSelect)
-          .eq("teacher_id", user.id)
-          .order("due_date", { ascending: false })
-      : db
-          .from("payments")
-          .select(paymentSelect)
-          .eq("student_id", user.id)
-          .order("due_date", { ascending: false }),
-  ]);
-  for (const result of [students, subjects, groups, lessons, payments])
+  const [students, subjects, groups, lessons, payments, redZones, prices] =
+    await Promise.all([
+      teacher
+        ? db
+            .from("profiles")
+            .select("*")
+            .eq("teacher_id", user.id)
+            .order("first_name")
+        : empty,
+      teacher
+        ? db
+            .from("subjects")
+            .select("*")
+            .eq("teacher_id", user.id)
+            .order("name")
+        : db.from("subjects").select("*").order("name"),
+      teacher
+        ? db
+            .from("groups")
+            .select(
+              "*, subject:subjects(name), members:group_members(student_id)",
+            )
+            .eq("teacher_id", user.id)
+            .order("name")
+        : db
+            .from("groups")
+            .select(
+              "*, subject:subjects(name), members:group_members(student_id)",
+            )
+            .order("name"),
+      teacher
+        ? db
+            .from("lessons")
+            .select(lessonSelect)
+            .eq("teacher_id", user.id)
+            .order("starts_at")
+        : db.from("lessons").select(lessonSelect).order("starts_at"),
+      teacher
+        ? db
+            .from("payments")
+            .select(paymentSelect)
+            .eq("teacher_id", user.id)
+            .order("due_date", { ascending: false })
+        : db
+            .from("payments")
+            .select(paymentSelect)
+            .eq("student_id", user.id)
+            .order("due_date", { ascending: false }),
+      teacher
+        ? db
+            .from("teacher_unavailability")
+            .select("*")
+            .eq("teacher_id", user.id)
+            .order("starts_at")
+        : db.from("teacher_unavailability").select("*").order("starts_at"),
+      teacher
+        ? db
+            .from("student_subject_prices")
+            .select(
+              "*,subject:subjects(name),student:profiles!student_subject_prices_student_id_fkey(first_name,last_name)",
+            )
+            .eq("teacher_id", user.id)
+        : db
+            .from("student_subject_prices")
+            .select("*,subject:subjects(name)")
+            .eq("student_id", user.id),
+    ]);
+  for (const result of [
+    students,
+    subjects,
+    groups,
+    lessons,
+    payments,
+    redZones,
+    prices,
+  ])
     if (result.error) throw result.error;
   return {
     user,
@@ -80,6 +111,8 @@ export async function getWorkspace() {
     groups: groups.data,
     lessons: lessons.data,
     payments: payments.data,
+    redZones: redZones.data,
+    prices: prices.data,
   };
 }
 
@@ -330,5 +363,56 @@ export async function markPaymentPaid(id) {
     .from("payments")
     .update({ status: "paid", paid_at: new Date().toISOString() })
     .eq("id", id);
+  if (error) throw error;
+}
+
+export async function createRedZone(input) {
+  const db = requireClient();
+  const {
+    data: { user },
+  } = await db.auth.getUser();
+  const { error } = await db
+    .from("teacher_unavailability")
+    .insert({ ...input, teacher_id: user.id });
+  if (error) throw error;
+}
+
+export async function updateRedZone(id, input) {
+  const { error } = await requireClient()
+    .from("teacher_unavailability")
+    .update(input)
+    .eq("id", id);
+  if (error) throw error;
+}
+
+export async function deleteRedZone(id) {
+  const { error } = await requireClient()
+    .from("teacher_unavailability")
+    .delete()
+    .eq("id", id);
+  if (error) throw error;
+}
+
+export async function setStudentSubjectPrice(input) {
+  const db = requireClient();
+  const {
+    data: { user },
+  } = await db.auth.getUser();
+  const { error } = await db
+    .from("student_subject_prices")
+    .upsert(
+      { ...input, teacher_id: user.id, updated_at: new Date().toISOString() },
+      { onConflict: "student_id,subject_id" },
+    );
+  if (error) throw error;
+}
+
+export async function setLessonStudentRecord(input) {
+  const { error } = await requireClient()
+    .from("lesson_student_records")
+    .upsert(
+      { ...input, updated_at: new Date().toISOString() },
+      { onConflict: "lesson_id,student_id" },
+    );
   if (error) throw error;
 }
