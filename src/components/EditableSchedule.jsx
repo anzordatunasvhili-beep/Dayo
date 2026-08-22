@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 const Icon = ({ children, size = 20 }) => (
   <span className="material-symbols-rounded" style={{ fontSize: size }}>
@@ -44,7 +44,19 @@ export default function EditableSchedule({
   const [weekStart, setWeekStart] = useState(() => mondayOf(new Date()));
   const [editing, setEditing] = useState(null);
   const [pendingMove, setPendingMove] = useState(null);
+  const [dragMotion, setDragMotion] = useState(null);
+  const [hourHeight, setHourHeight] = useState(40);
+  const calendarBody = useRef(null);
   const dragging = useRef(false);
+  useEffect(() => {
+    const fit = () =>
+      setHourHeight(
+        Math.max(24, Math.min(48, (window.innerHeight - 250) / 15)),
+      );
+    fit();
+    window.addEventListener("resize", fit);
+    return () => window.removeEventListener("resize", fit);
+  }, []);
   const weekDays = useMemo(
     () =>
       Array.from({ length: 7 }, (_, i) => {
@@ -65,28 +77,58 @@ export default function EditableSchedule({
     next.setDate(next.getDate() + amount * 7);
     setWeekStart(next);
   };
-  const dropLesson = (event, day) => {
-    event.preventDefault();
-    const id = event.dataTransfer.getData("text/lesson-id");
-    const lesson = lessons.find((item) => item.id === id);
-    if (!lesson) return;
-    const bounds = event.currentTarget.getBoundingClientRect();
-    const minutes = Math.max(
-      0,
-      Math.min(
-        14 * 60,
-        Math.round((((event.clientY - bounds.top) / 60) * 60) / 15) * 15,
-      ),
-    );
-    const start = new Date(day);
-    start.setHours(7 + Math.floor(minutes / 60), minutes % 60, 0, 0);
-    const duration = new Date(lesson.ends_at) - new Date(lesson.starts_at);
-    const end = new Date(start.getTime() + duration);
-    setPendingMove({
+  const startDrag = (event, lesson) => {
+    if (readOnly || event.button !== 0) return;
+    event.currentTarget.setPointerCapture(event.pointerId);
+    setDragMotion({
       lesson,
-      starts_at: start.toISOString(),
-      ends_at: end.toISOString(),
+      originX: event.clientX,
+      originY: event.clientY,
+      x: 0,
+      y: 0,
     });
+  };
+  const moveDrag = (event) => {
+    if (!dragMotion) return;
+    const x = event.clientX - dragMotion.originX;
+    const y = event.clientY - dragMotion.originY;
+    if (Math.abs(x) + Math.abs(y) > 4) dragging.current = true;
+    setDragMotion({ ...dragMotion, x, y });
+  };
+  const finishDrag = (event) => {
+    if (!dragMotion) return;
+    if (dragging.current && calendarBody.current) {
+      const rect = calendarBody.current.getBoundingClientRect();
+      const dayWidth = (rect.width - 70) / 7;
+      const dayIndex = Math.max(
+        0,
+        Math.min(6, Math.floor((event.clientX - rect.left - 70) / dayWidth)),
+      );
+      const minuteOffset = Math.max(
+        0,
+        Math.min(
+          14 * 60,
+          Math.round((((event.clientY - rect.top) / hourHeight) * 60) / 15) *
+            15,
+        ),
+      );
+      const start = new Date(weekDays[dayIndex]);
+      start.setHours(
+        7 + Math.floor(minuteOffset / 60),
+        minuteOffset % 60,
+        0,
+        0,
+      );
+      const duration =
+        new Date(dragMotion.lesson.ends_at) -
+        new Date(dragMotion.lesson.starts_at);
+      setPendingMove({
+        lesson: dragMotion.lesson,
+        starts_at: start.toISOString(),
+        ends_at: new Date(start.getTime() + duration).toISOString(),
+      });
+    }
+    setDragMotion(null);
     setTimeout(() => {
       dragging.current = false;
     }, 0);
@@ -163,12 +205,20 @@ export default function EditableSchedule({
               </div>
             ))}
           </div>
-          <div className="h-[900px] grid grid-cols-[70px_repeat(7,1fr)] bg-[linear-gradient(to_bottom,#eeece7_1px,transparent_1px)] bg-[length:100%_60px]">
+          <div
+            ref={calendarBody}
+            className="grid grid-cols-[70px_repeat(7,1fr)] bg-[linear-gradient(to_bottom,#eeece7_1px,transparent_1px)]"
+            style={{
+              height: hourHeight * 15,
+              backgroundSize: `100% ${hourHeight}px`,
+            }}
+          >
             <div>
               {Array.from({ length: 15 }, (_, i) => (
                 <div
                   key={i}
-                  className="h-[60px] text-[10px] text-[#999] text-center pt-1"
+                  style={{ height: hourHeight }}
+                  className="text-[10px] text-[#999] text-center pt-1"
                 >
                   {String(i + 7).padStart(2, "0")}:00
                 </div>
@@ -177,8 +227,6 @@ export default function EditableSchedule({
             {weekDays.map((day, dayIndex) => (
               <div
                 key={day.toISOString()}
-                onDragOver={(e) => e.preventDefault()}
-                onDrop={(e) => dropLesson(e, day)}
                 className="relative border-l border-[#eeece7]"
               >
                 {visible
@@ -213,21 +261,34 @@ export default function EditableSchedule({
                       : "Open slot";
                     return (
                       <button
-                        draggable={!readOnly}
-                        onDragStart={(e) => {
-                          if (readOnly) return;
-                          dragging.current = true;
-                          e.dataTransfer.effectAllowed = "move";
-                          e.dataTransfer.setData("text/lesson-id", lesson.id);
+                        onPointerDown={(e) => startDrag(e, lesson)}
+                        onPointerMove={moveDrag}
+                        onPointerUp={finishDrag}
+                        onPointerCancel={() => {
+                          setDragMotion(null);
+                          dragging.current = false;
                         }}
                         onClick={() =>
                           !readOnly && !dragging.current && setEditing(lesson)
                         }
                         key={lesson.id}
-                        className={`absolute left-2 right-2 rounded-xl border text-left p-3 overflow-hidden ${readOnly ? "cursor-default" : "cursor-grab active:cursor-grabbing hover:shadow-md"} transition ${colors[index % colors.length]}`}
+                        className={`absolute left-2 right-2 rounded-xl border text-left p-3 overflow-hidden select-none ${readOnly ? "cursor-default" : "cursor-grab active:cursor-grabbing hover:shadow-md touch-none"} ${colors[index % colors.length]}`}
                         style={{
-                          top: (startHour - 7) * 60 + 5,
-                          height: Math.max(44, duration * 60 - 8),
+                          top: (startHour - 7) * hourHeight + 3,
+                          height: Math.max(32, duration * hourHeight - 6),
+                          transform:
+                            dragMotion?.lesson.id === lesson.id
+                              ? `translate3d(${dragMotion.x}px, ${dragMotion.y}px, 0) scale(1.02)`
+                              : "translate3d(0,0,0)",
+                          zIndex: dragMotion?.lesson.id === lesson.id ? 30 : 1,
+                          boxShadow:
+                            dragMotion?.lesson.id === lesson.id
+                              ? "0 16px 30px rgba(40,40,35,.18)"
+                              : undefined,
+                          transition:
+                            dragMotion?.lesson.id === lesson.id
+                              ? "none"
+                              : "transform 180ms ease, box-shadow 180ms ease",
                         }}
                       >
                         <div className="flex gap-1 items-center">

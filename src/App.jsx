@@ -1020,6 +1020,8 @@ function Subjects({
   const [subjectName, setSubjectName] = useState("");
   const [subjectIcon, setSubjectIcon] = useState("calculate");
   const [groupName, setGroupName] = useState("");
+  const [groupSubject, setGroupSubject] = useState(subjects[0]?.id || "");
+  const [groupMembers, setGroupMembers] = useState([]);
   return (
     <div className="p-5 md:p-8 max-w-[1400px] mx-auto animate-in">
       <form
@@ -1106,23 +1108,67 @@ function Subjects({
             e.preventDefault();
             onGroup({
               name: groupName,
-              subject_id: subjects[0]?.id,
-              student_ids: [],
+              subject_id: groupSubject,
+              student_ids: groupMembers,
             });
             setGroupName("");
+            setGroupMembers([]);
           }}
-          className="flex gap-2 mt-5"
+          className="mt-5"
         >
-          <input
-            required
-            value={groupName}
-            onChange={(e) => setGroupName(e.target.value)}
-            className="h-10 px-3 border border-[#ddd] rounded-xl text-sm"
-            placeholder="Group name"
-          />
-          <button className="bg-[#30312d] text-white border-0 rounded-xl px-4 text-xs">
-            Create group
-          </button>
+          <div className="flex flex-wrap gap-2">
+            <input
+              required
+              value={groupName}
+              onChange={(e) => setGroupName(e.target.value)}
+              className="h-10 px-3 border border-[#ddd] rounded-xl text-sm"
+              placeholder="Group name"
+            />
+            <select
+              required
+              value={groupSubject}
+              onChange={(e) => setGroupSubject(e.target.value)}
+              className="h-10 min-w-44 px-3 border border-[#ddd] rounded-xl text-sm bg-white"
+            >
+              <option value="">Select subject</option>
+              {subjects.map((subject) => (
+                <option key={subject.id} value={subject.id}>
+                  {subject.name}
+                </option>
+              ))}
+            </select>
+            <button className="bg-[#30312d] text-white border-0 rounded-xl px-4 text-xs">
+              Create group
+            </button>
+          </div>
+          {students.length > 0 && (
+            <div className="mt-4 rounded-2xl bg-[#f5f3ee] p-4">
+              <p className="text-[10px] tracking-wider text-[#999] mb-2">
+                ADD STUDENTS (OPTIONAL)
+              </p>
+              <div className="flex flex-wrap gap-x-5 gap-y-2">
+                {students.map((student) => (
+                  <label
+                    key={student.id}
+                    className="flex items-center gap-2 text-xs"
+                  >
+                    <input
+                      type="checkbox"
+                      checked={groupMembers.includes(student.id)}
+                      onChange={() =>
+                        setGroupMembers(
+                          groupMembers.includes(student.id)
+                            ? groupMembers.filter((id) => id !== student.id)
+                            : [...groupMembers, student.id],
+                        )
+                      }
+                    />
+                    {student.first_name} {student.last_name}
+                  </label>
+                ))}
+              </div>
+            </div>
+          )}
         </form>
         <div className="grid sm:grid-cols-2 gap-4 mt-6">
           {groups.map((g) => (
