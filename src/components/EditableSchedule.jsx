@@ -188,9 +188,24 @@ export default function EditableSchedule({
                     const startHour =
                       start.getHours() + start.getMinutes() / 60;
                     const duration = (end - start) / 36e5;
-                    const audience = lesson.student
-                      ? `${lesson.student.first_name} ${lesson.student.last_name}`
-                      : lesson.group?.name || "Open slot";
+                    const audienceNames = [
+                      ...(lesson.student_audiences || []).map(
+                        (item) =>
+                          `${item.student.first_name} ${item.student.last_name}`,
+                      ),
+                      ...(lesson.group_audiences || []).map(
+                        (item) => item.group.name,
+                      ),
+                    ];
+                    if (!audienceNames.length && lesson.student)
+                      audienceNames.push(
+                        `${lesson.student.first_name} ${lesson.student.last_name}`,
+                      );
+                    if (!audienceNames.length && lesson.group)
+                      audienceNames.push(lesson.group.name);
+                    const audience = audienceNames.length
+                      ? audienceNames.join(", ")
+                      : "Open slot";
                     return (
                       <button
                         draggable
@@ -313,22 +328,25 @@ function LessonEditor({
   onSave,
   onDelete,
 }) {
-  const initialAudience = lesson?.student_id
-    ? `student:${lesson.student_id}`
-    : lesson?.group_id
-      ? `group:${lesson.group_id}`
-      : "";
+  const initialStudentIds =
+    lesson?.student_audiences?.map((item) => item.student_id) ||
+    (lesson?.student_id ? [lesson.student_id] : []);
+  const initialGroupIds =
+    lesson?.group_audiences?.map((item) => item.group_id) ||
+    (lesson?.group_id ? [lesson.group_id] : []);
   const initialDuration = lesson
     ? (new Date(lesson.ends_at) - new Date(lesson.starts_at)) / 60000
     : 60;
   const [form, setForm] = useState({
     subject_id: lesson?.subject_id || subjects[0]?.id || "",
-    audience: initialAudience,
+    student_ids: initialStudentIds,
+    group_ids: initialGroupIds,
     date: dateValue(lesson?.starts_at || initialDate || new Date()),
     time: timeValue(lesson?.starts_at || new Date().setHours(10, 0, 0, 0)),
     duration: initialDuration,
     available: lesson?.available || false,
     notes: lesson?.notes || "",
+    recurrence_weeks: 1,
   });
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
@@ -337,17 +355,19 @@ function LessonEditor({
     setSaving(true);
     setError("");
     try {
+      if (!form.available && !form.student_ids.length && !form.group_ids.length)
+        throw new Error("Select at least one student or group.");
       const start = new Date(`${form.date}T${form.time}`);
       const end = new Date(start.getTime() + Number(form.duration) * 60000);
-      const [kind, id] = form.audience.split(":");
       await onSave({
         subject_id: form.subject_id || null,
-        student_id: !form.available && kind === "student" ? id : null,
-        group_id: !form.available && kind === "group" ? id : null,
+        student_ids: form.available ? [] : form.student_ids,
+        group_ids: form.available ? [] : form.group_ids,
         starts_at: start.toISOString(),
         ends_at: end.toISOString(),
         available: form.available,
         notes: form.notes || null,
+        ...(!lesson ? { recurrence_weeks: Number(form.recurrence_weeks) } : {}),
       });
     } catch (err) {
       setError(err.message);
@@ -372,27 +392,6 @@ function LessonEditor({
               {subjects.map((s) => (
                 <option value={s.id} key={s.id}>
                   {s.name}
-                </option>
-              ))}
-            </select>
-          </Field>
-          <Field label="Student or group">
-            <select
-              required={!form.available}
-              disabled={form.available}
-              className={inputClass}
-              value={form.audience}
-              onChange={(e) => setForm({ ...form, audience: e.target.value })}
-            >
-              <option value="">Select audience</option>
-              {students.map((s) => (
-                <option value={`student:${s.id}`} key={s.id}>
-                  {s.first_name} {s.last_name}
-                </option>
-              ))}
-              {groups.map((g) => (
-                <option value={`group:${g.id}`} key={g.id}>
-                  {g.name} (group)
                 </option>
               ))}
             </select>
@@ -429,6 +428,25 @@ function LessonEditor({
               ))}
             </select>
           </Field>
+          {!lesson && (
+            <Field label="Repeat weekly">
+              <select
+                className={inputClass}
+                value={form.recurrence_weeks}
+                onChange={(e) =>
+                  setForm({ ...form, recurrence_weeks: e.target.value })
+                }
+              >
+                <option value="1">Does not repeat</option>
+                <option value="2">For 2 weeks</option>
+                <option value="4">For 4 weeks</option>
+                <option value="8">For 8 weeks</option>
+                <option value="12">For 12 weeks</option>
+                <option value="24">For 24 weeks</option>
+                <option value="52">For 1 year</option>
+              </select>
+            </Field>
+          )}
         </div>
         <label className="flex items-center gap-2 text-xs mb-4">
           <input
@@ -438,6 +456,16 @@ function LessonEditor({
           />
           Available booking slot
         </label>
+        {!form.available && (
+          <AudiencePicker
+            students={students}
+            groups={groups}
+            studentIds={form.student_ids}
+            groupIds={form.group_ids}
+            onStudents={(student_ids) => setForm({ ...form, student_ids })}
+            onGroups={(group_ids) => setForm({ ...form, group_ids })}
+          />
+        )}
         <Field label="Notes">
           <textarea
             className={`${inputClass} h-20 py-3 resize-none`}
@@ -471,6 +499,81 @@ function LessonEditor({
         </div>
       </form>
     </Modal>
+  );
+}
+
+function AudiencePicker({
+  students,
+  groups,
+  studentIds,
+  groupIds,
+  onStudents,
+  onGroups,
+}) {
+  const toggle = (values, id, setter) =>
+    setter(
+      values.includes(id)
+        ? values.filter((value) => value !== id)
+        : [...values, id],
+    );
+  return (
+    <div className="mb-4 rounded-2xl border border-[#dedbd3] bg-white p-4">
+      <div className="flex items-center justify-between mb-3">
+        <div>
+          <p className="text-xs font-semibold">Audience</p>
+          <p className="text-[10px] text-[#999] mt-0.5">
+            Mix any students and groups
+          </p>
+        </div>
+        <span className="text-[10px] bg-[#efede7] rounded-full px-2 py-1">
+          {studentIds.length + groupIds.length} selected
+        </span>
+      </div>
+      <div className="grid sm:grid-cols-2 gap-4 max-h-44 overflow-auto">
+        <div>
+          <p className="text-[10px] tracking-wider text-[#999] mb-2">
+            INDIVIDUAL STUDENTS
+          </p>
+          {students.length ? (
+            students.map((student) => (
+              <label
+                key={student.id}
+                className="flex items-center gap-2 py-1.5 text-xs"
+              >
+                <input
+                  type="checkbox"
+                  checked={studentIds.includes(student.id)}
+                  onChange={() => toggle(studentIds, student.id, onStudents)}
+                />
+                {student.first_name} {student.last_name}
+              </label>
+            ))
+          ) : (
+            <p className="text-xs text-[#aaa]">No students yet</p>
+          )}
+        </div>
+        <div>
+          <p className="text-[10px] tracking-wider text-[#999] mb-2">GROUPS</p>
+          {groups.length ? (
+            groups.map((group) => (
+              <label
+                key={group.id}
+                className="flex items-center gap-2 py-1.5 text-xs"
+              >
+                <input
+                  type="checkbox"
+                  checked={groupIds.includes(group.id)}
+                  onChange={() => toggle(groupIds, group.id, onGroups)}
+                />
+                {group.name}
+              </label>
+            ))
+          ) : (
+            <p className="text-xs text-[#aaa]">No groups yet</p>
+          )}
+        </div>
+      </div>
+    </div>
   );
 }
 

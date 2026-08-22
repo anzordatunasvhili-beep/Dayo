@@ -31,7 +31,7 @@ export async function getWorkspace() {
       db
         .from("lessons")
         .select(
-          "*, subject:subjects(name,icon), student:profiles!lessons_student_id_fkey(first_name,last_name), group:groups(name)",
+          "*, subject:subjects(name,icon), student:profiles!lessons_student_id_fkey(first_name,last_name), group:groups(name), student_audiences:lesson_students(student_id,student:profiles(first_name,last_name)), group_audiences:lesson_groups(group_id,group:groups(name))",
         )
         .eq("teacher_id", user.id)
         .order("starts_at"),
@@ -80,12 +80,48 @@ export async function createLesson(input) {
   const {
     data: { user },
   } = await db.auth.getUser();
-  const { data, error } = await db
-    .from("lessons")
-    .insert({ ...input, teacher_id: user.id })
-    .select()
-    .single();
+  const {
+    student_ids = [],
+    group_ids = [],
+    recurrence_weeks = 1,
+    ...lesson
+  } = input;
+  const seriesId = recurrence_weeks > 1 ? crypto.randomUUID() : null;
+  const rows = Array.from({ length: recurrence_weeks }, (_, index) => {
+    const starts = new Date(lesson.starts_at);
+    starts.setDate(starts.getDate() + index * 7);
+    const ends = new Date(lesson.ends_at);
+    ends.setDate(ends.getDate() + index * 7);
+    return {
+      ...lesson,
+      starts_at: starts.toISOString(),
+      ends_at: ends.toISOString(),
+      teacher_id: user.id,
+      student_id: null,
+      group_id: null,
+      recurrence_series_id: seriesId,
+    };
+  });
+  const { data, error } = await db.from("lessons").insert(rows).select();
   if (error) throw error;
+  const studentRows = data.flatMap((item) =>
+    student_ids.map((student_id) => ({ lesson_id: item.id, student_id })),
+  );
+  const groupRows = data.flatMap((item) =>
+    group_ids.map((group_id) => ({ lesson_id: item.id, group_id })),
+  );
+  if (studentRows.length) {
+    const { error: audienceError } = await db
+      .from("lesson_students")
+      .insert(studentRows);
+    if (audienceError) throw audienceError;
+  }
+  if (groupRows.length) {
+    const { error: audienceError } = await db
+      .from("lesson_groups")
+      .insert(groupRows);
+    if (audienceError) throw audienceError;
+  }
   return data;
 }
 
@@ -95,13 +131,35 @@ export async function deleteLesson(id) {
 }
 
 export async function updateLesson(id, input) {
-  const { data, error } = await requireClient()
+  const db = requireClient();
+  const { student_ids, group_ids, ...lesson } = input;
+  const { data, error } = await db
     .from("lessons")
-    .update(input)
+    .update({ ...lesson, student_id: null, group_id: null })
     .eq("id", id)
     .select()
     .single();
   if (error) throw error;
+  if (student_ids) {
+    await db.from("lesson_students").delete().eq("lesson_id", id);
+    if (student_ids.length) {
+      const { error: audienceError } = await db
+        .from("lesson_students")
+        .insert(
+          student_ids.map((student_id) => ({ lesson_id: id, student_id })),
+        );
+      if (audienceError) throw audienceError;
+    }
+  }
+  if (group_ids) {
+    await db.from("lesson_groups").delete().eq("lesson_id", id);
+    if (group_ids.length) {
+      const { error: audienceError } = await db
+        .from("lesson_groups")
+        .insert(group_ids.map((group_id) => ({ lesson_id: id, group_id })));
+      if (audienceError) throw audienceError;
+    }
+  }
   return data;
 }
 
