@@ -15,6 +15,7 @@ import {
   updateLessonScope,
   updateSubject,
   updateGroup,
+  updateStudent,
   updateRedZone,
   deleteRedZone,
   setStudentSubjectPrice,
@@ -576,9 +577,10 @@ function LessonModal({ onClose, onSave, students, subjects, groups }) {
   );
 }
 
-function Students({ students, onCreate, subjects, groups, profile }) {
+function Students({ students, onCreate, onUpdate, subjects, groups, profile }) {
   const [query, setQuery] = useState("");
   const [modal, setModal] = useState(false);
+  const [editingStudent, setEditingStudent] = useState(null);
   const list = students.filter(
     (s) =>
       s.name.toLowerCase().includes(query.toLowerCase()) ||
@@ -651,8 +653,12 @@ function Students({ students, onCreate, subjects, groups, profile }) {
               >
                 {s.balance ? `$${s.balance} due` : "Paid"}
               </div>
-              <button className="w-8 h-8 border-0 bg-transparent">
-                <Icon size={18}>more_horiz</Icon>
+              <button
+                onClick={() => setEditingStudent(s.raw)}
+                className="w-8 h-8 border-0 bg-transparent"
+                title="Edit student"
+              >
+                <Icon size={18}>edit</Icon>
               </button>
             </div>
           ))
@@ -669,6 +675,18 @@ function Students({ students, onCreate, subjects, groups, profile }) {
           onSave={async (s) => {
             await onCreate(s);
             setModal(false);
+          }}
+        />
+      )}
+      {editingStudent && (
+        <StudentEditor
+          student={editingStudent}
+          subjects={subjects}
+          groups={groups}
+          onClose={() => setEditingStudent(null)}
+          onSave={async (values) => {
+            await onUpdate(editingStudent.id, values);
+            setEditingStudent(null);
           }}
         />
       )}
@@ -830,7 +848,7 @@ function StudentModal({ onClose, onSave, subjects, groups, profile }) {
 
 function lessonChargeSummary(students, lessons, prices, payments) {
   return students.map((student) => {
-    const attended = lessons.flatMap((lesson) =>
+    const completedAttended = lessons.flatMap((lesson) =>
       (lesson.records || [])
         .filter(
           (record) =>
@@ -839,6 +857,9 @@ function lessonChargeSummary(students, lessons, prices, payments) {
             new Date(lesson.ends_at) <= new Date(),
         )
         .map((record) => ({ lesson, record })),
+    );
+    const attended = completedAttended.filter(
+      ({ record }) => record.billable !== false && !record.paid,
     );
     const totals = {};
     for (const { lesson, record } of attended) {
@@ -862,6 +883,8 @@ function lessonChargeSummary(students, lessons, prices, payments) {
     return {
       student,
       lessonCount: attended.length,
+      paidLessonCount: completedAttended.filter(({ record }) => record.paid)
+        .length,
       totals: Object.fromEntries(
         Object.entries(totals).map(([currency, value]) => [
           currency,
@@ -870,6 +893,116 @@ function lessonChargeSummary(students, lessons, prices, payments) {
       ),
     };
   });
+}
+
+function StudentEditor({ student, subjects, groups, onClose, onSave }) {
+  const [form, setForm] = useState({
+    first_name: student.first_name,
+    last_name: student.last_name,
+    country_region: student.country_region || "",
+    subject_ids: (student.assignments || []).map((item) => item.subject_id),
+    group_ids: (student.memberships || []).map((item) => item.group_id),
+  });
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState("");
+  const toggle = (field, id) =>
+    setForm({
+      ...form,
+      [field]: form[field].includes(id)
+        ? form[field].filter((value) => value !== id)
+        : [...form[field], id],
+    });
+  return (
+    <ModalShell title="Edit student" onClose={onClose}>
+      <form
+        onSubmit={async (e) => {
+          e.preventDefault();
+          setSaving(true);
+          setError("");
+          try {
+            await onSave(form);
+          } catch (requestError) {
+            setError(requestError.message);
+            setSaving(false);
+          }
+        }}
+      >
+        <div className="grid grid-cols-2 gap-3">
+          <Field label="First name">
+            <input
+              required
+              className={inputClass}
+              value={form.first_name}
+              onChange={(e) => setForm({ ...form, first_name: e.target.value })}
+            />
+          </Field>
+          <Field label="Last name">
+            <input
+              required
+              className={inputClass}
+              value={form.last_name}
+              onChange={(e) => setForm({ ...form, last_name: e.target.value })}
+            />
+          </Field>
+        </div>
+        <Field label="Country & region">
+          <input
+            required
+            className={inputClass}
+            value={form.country_region}
+            onChange={(e) =>
+              setForm({ ...form, country_region: e.target.value })
+            }
+          />
+        </Field>
+        <div className="grid sm:grid-cols-2 gap-4 mb-5">
+          <div className="rounded-2xl border border-[#ddd] p-4">
+            <p className="text-xs font-semibold mb-2">Subjects</p>
+            {subjects.map((subject) => (
+              <label
+                key={subject.id}
+                className="flex items-center gap-2 py-1.5 text-xs"
+              >
+                <input
+                  type="checkbox"
+                  checked={form.subject_ids.includes(subject.id)}
+                  onChange={() => toggle("subject_ids", subject.id)}
+                />
+                {subject.name}
+              </label>
+            ))}
+          </div>
+          <div className="rounded-2xl border border-[#ddd] p-4">
+            <p className="text-xs font-semibold mb-2">Groups</p>
+            {groups.map((group) => (
+              <label
+                key={group.id}
+                className="flex items-center gap-2 py-1.5 text-xs"
+              >
+                <input
+                  type="checkbox"
+                  checked={form.group_ids.includes(group.id)}
+                  onChange={() => toggle("group_ids", group.id)}
+                />
+                {group.name}
+              </label>
+            ))}
+          </div>
+        </div>
+        {error && (
+          <p className="mb-3 text-xs text-[#a35645] bg-[#f3e3de] rounded-xl p-3">
+            {error}
+          </p>
+        )}
+        <button
+          disabled={saving}
+          className="w-full h-11 rounded-xl border-0 bg-[#30312d] text-white text-sm font-semibold"
+        >
+          {saving ? "Saving…" : "Save student"}
+        </button>
+      </form>
+    </ModalShell>
+  );
 }
 
 function Payments({
@@ -975,34 +1108,35 @@ function Payments({
           </p>
         </div>
         <div className="grid md:grid-cols-2 gap-3">
-          {chargeSummary.map(({ student, lessonCount, totals }) => (
-            <div
-              key={student.id}
-              className="rounded-2xl bg-white/5 border border-white/10 p-4 flex items-center"
-            >
-              <div className="flex-1">
-                <p className="text-sm font-semibold">
-                  {student.first_name} {student.last_name}
-                </p>
-                <p className="text-[10px] text-white/45 mt-1">
-                  {lessonCount} attended completed lesson
-                  {lessonCount === 1 ? "" : "s"}
-                </p>
+          {chargeSummary.map(
+            ({ student, lessonCount, paidLessonCount, totals }) => (
+              <div
+                key={student.id}
+                className="rounded-2xl bg-white/5 border border-white/10 p-4 flex items-center"
+              >
+                <div className="flex-1">
+                  <p className="text-sm font-semibold">
+                    {student.first_name} {student.last_name}
+                  </p>
+                  <p className="text-[10px] text-white/45 mt-1">
+                    {lessonCount} payable · {paidLessonCount} marked paid
+                  </p>
+                </div>
+                <div className="text-right">
+                  {Object.keys(totals).length ? (
+                    Object.entries(totals).map(([currency, value]) => (
+                      <p key={currency} className="text-sm font-semibold">
+                        {currency} {value.toFixed(2)}
+                      </p>
+                    ))
+                  ) : (
+                    <p className="text-xs text-white/40">No charges</p>
+                  )}
+                  <p className="text-[9px] text-white/40 mt-1">TO PAY</p>
+                </div>
               </div>
-              <div className="text-right">
-                {Object.keys(totals).length ? (
-                  Object.entries(totals).map(([currency, value]) => (
-                    <p key={currency} className="text-sm font-semibold">
-                      {currency} {value.toFixed(2)}
-                    </p>
-                  ))
-                ) : (
-                  <p className="text-xs text-white/40">No charges</p>
-                )}
-                <p className="text-[9px] text-white/40 mt-1">TO PAY</p>
-              </div>
-            </div>
-          ))}
+            ),
+          )}
         </div>
       </div>
       <div className="bg-white rounded-[24px] border border-[#e5e2dc] p-6">
@@ -1782,7 +1916,14 @@ export default function App() {
     email: s.email || "Student account",
     initials: `${s.first_name[0]}${s.last_name[0]}`,
     color: ["#dce9e4", "#e9e1d6", "#dfe3ef", "#eee2dd"][i % 4],
-    subjects: [],
+    subjects: (s.assignments || [])
+      .map(
+        (assignment) =>
+          data.subjects.find((subject) => subject.id === assignment.subject_id)
+            ?.name,
+      )
+      .filter(Boolean),
+    raw: s,
     balance: data.payments
       .filter((p) => p.student_id === s.id && p.status !== "paid")
       .reduce((n, p) => n + Number(p.amount), 0),
@@ -1834,6 +1975,9 @@ export default function App() {
         groups={data.groups}
         profile={data.profile}
         onCreate={(v) => act(() => createStudent(v), "Student account created")}
+        onUpdate={(id, values) =>
+          act(() => updateStudent(id, values), "Student updated")
+        }
       />
     ),
     payments: (

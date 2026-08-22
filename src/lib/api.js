@@ -22,7 +22,7 @@ export async function getWorkspace() {
   if (profile.error) throw profile.error;
   const teacher = profile.data.role === "teacher";
   const lessonSelect =
-    "*, subject:subjects!lessons_subject_id_fkey(name,icon), student:profiles!lessons_student_id_fkey(first_name,last_name), group:groups!lessons_group_id_fkey(name), student_audiences:lesson_students!lesson_students_lesson_id_fkey(student_id,student:profiles!lesson_students_student_id_fkey(first_name,last_name)), group_audiences:lesson_groups!lesson_groups_lesson_id_fkey(group_id,group:groups!lesson_groups_group_id_fkey(name)), records:lesson_student_records(student_id,attendance,homework,homework_note,price_snapshot,currency)";
+    "*, subject:subjects!lessons_subject_id_fkey(name,icon), student:profiles!lessons_student_id_fkey(first_name,last_name), group:groups!lessons_group_id_fkey(name), student_audiences:lesson_students!lesson_students_lesson_id_fkey(student_id,student:profiles!lesson_students_student_id_fkey(first_name,last_name)), group_audiences:lesson_groups!lesson_groups_lesson_id_fkey(group_id,group:groups!lesson_groups_group_id_fkey(name)), records:lesson_student_records(student_id,attendance,homework,homework_note,price_snapshot,currency,billable,paid)";
   const paymentSelect =
     "*, student:profiles!payments_student_id_fkey(first_name,last_name)";
   const empty = Promise.resolve({ data: [], error: null });
@@ -31,7 +31,9 @@ export async function getWorkspace() {
       teacher
         ? db
             .from("profiles")
-            .select("*")
+            .select(
+              "*, assignments:student_subjects!student_subjects_student_id_fkey(subject_id,lesson_mode), memberships:group_members!group_members_student_id_fkey(group_id)",
+            )
             .eq("teacher_id", user.id)
             .order("first_name")
         : empty,
@@ -133,6 +135,48 @@ export async function createStudent(input) {
   }
   if (data?.error) throw new Error(data.error);
   return data;
+}
+
+export async function updateStudent(id, input) {
+  const db = requireClient();
+  const { subject_ids = [], group_ids = [], ...profile } = input;
+  const { error } = await db
+    .from("profiles")
+    .update({
+      first_name: profile.first_name,
+      last_name: profile.last_name,
+      country_region: profile.country_region,
+    })
+    .eq("id", id);
+  if (error) throw error;
+  const { error: assignmentDelete } = await db
+    .from("student_subjects")
+    .delete()
+    .eq("student_id", id);
+  if (assignmentDelete) throw assignmentDelete;
+  if (subject_ids.length) {
+    const { error: assignmentError } = await db
+      .from("student_subjects")
+      .insert(
+        subject_ids.map((subject_id) => ({
+          student_id: id,
+          subject_id,
+          lesson_mode: "individual",
+        })),
+      );
+    if (assignmentError) throw assignmentError;
+  }
+  const { error: memberDelete } = await db
+    .from("group_members")
+    .delete()
+    .eq("student_id", id);
+  if (memberDelete) throw memberDelete;
+  if (group_ids.length) {
+    const { error: memberError } = await db
+      .from("group_members")
+      .insert(group_ids.map((group_id) => ({ student_id: id, group_id })));
+    if (memberError) throw memberError;
+  }
 }
 
 export async function createLesson(input) {

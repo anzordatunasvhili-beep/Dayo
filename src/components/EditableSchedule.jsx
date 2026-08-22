@@ -851,6 +851,8 @@ function TrackingPanel({ lesson, students, groups, onTrack }) {
           attendance: saved?.attendance || "unknown",
           homework: saved?.homework || "none",
           homework_note: saved?.homework_note || "",
+          billable: saved?.billable ?? true,
+          paid: saved?.paid ?? false,
         },
       ];
     }),
@@ -901,6 +903,26 @@ function TrackingPanel({ lesson, students, groups, onTrack }) {
                 <option value="completed">Completed</option>
                 <option value="missing">Missing</option>
               </select>
+            </div>
+            <div className="mt-3 flex flex-wrap gap-4">
+              <label className="flex items-center gap-2 text-xs font-medium">
+                <input
+                  type="checkbox"
+                  checked={records[student.id].billable}
+                  onChange={(e) =>
+                    change(student.id, "billable", e.target.checked)
+                  }
+                />
+                Counts toward payment
+              </label>
+              <label className="flex items-center gap-2 text-xs font-medium text-[#52735d]">
+                <input
+                  type="checkbox"
+                  checked={records[student.id].paid}
+                  onChange={(e) => change(student.id, "paid", e.target.checked)}
+                />
+                Already paid
+              </label>
             </div>
             <input
               className="mt-2 w-full h-9 rounded-lg border border-[#ddd] bg-white px-2 text-xs"
