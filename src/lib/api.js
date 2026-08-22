@@ -157,6 +157,25 @@ export async function deleteLesson(id) {
   if (error) throw error;
 }
 
+export async function deleteLessonScope(id, scope = "occurrence") {
+  if (scope === "occurrence") return deleteLesson(id);
+  const db = requireClient();
+  const { data: target, error: targetError } = await db
+    .from("lessons")
+    .select("recurrence_series_id,starts_at")
+    .eq("id", id)
+    .single();
+  if (targetError) throw targetError;
+  if (!target.recurrence_series_id) return deleteLesson(id);
+  let query = db
+    .from("lessons")
+    .delete()
+    .eq("recurrence_series_id", target.recurrence_series_id);
+  if (scope === "future") query = query.gte("starts_at", target.starts_at);
+  const { error } = await query;
+  if (error) throw error;
+}
+
 export async function updateLesson(id, input) {
   const db = requireClient();
   const { student_ids, group_ids, ...lesson } = input;
@@ -188,6 +207,44 @@ export async function updateLesson(id, input) {
     }
   }
   return data;
+}
+
+export async function updateLessonScope(id, input, scope = "occurrence") {
+  if (scope === "occurrence") return updateLesson(id, input);
+  const db = requireClient();
+  const { data: target, error: targetError } = await db
+    .from("lessons")
+    .select("id,recurrence_series_id,starts_at,ends_at")
+    .eq("id", id)
+    .single();
+  if (targetError) throw targetError;
+  if (!target.recurrence_series_id) return updateLesson(id, input);
+  const { data: series, error: seriesError } = await db
+    .from("lessons")
+    .select("id,starts_at,ends_at")
+    .eq("recurrence_series_id", target.recurrence_series_id)
+    .order("starts_at");
+  if (seriesError) throw seriesError;
+  const selected =
+    scope === "future"
+      ? series.filter(
+          (item) => new Date(item.starts_at) >= new Date(target.starts_at),
+        )
+      : series;
+  const delta = new Date(input.starts_at) - new Date(target.starts_at);
+  const duration = new Date(input.ends_at) - new Date(input.starts_at);
+  const { starts_at: _start, ends_at: _end, ...shared } = input;
+  await Promise.all(
+    selected.map((item) => {
+      const start = new Date(new Date(item.starts_at).getTime() + delta);
+      const end = new Date(start.getTime() + duration);
+      return updateLesson(item.id, {
+        ...shared,
+        starts_at: start.toISOString(),
+        ends_at: end.toISOString(),
+      });
+    }),
+  );
 }
 
 export async function createSubject(input) {

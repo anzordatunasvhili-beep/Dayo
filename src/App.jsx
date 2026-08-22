@@ -7,9 +7,11 @@ import {
   createStudent,
   createSubject,
   deleteLesson,
+  deleteLessonScope,
   getWorkspace,
   markPaymentPaid,
   updateLesson,
+  updateLessonScope,
   updateSubject,
 } from "./lib/api";
 import Auth from "./Auth";
@@ -1383,8 +1385,22 @@ export default function App() {
         subjects={data.subjects}
         groups={data.groups}
         onCreate={(v) => act(() => createLesson(v), "Lesson saved")}
-        onUpdate={(id, v) => act(() => updateLesson(id, v), "Lesson updated")}
-        onDelete={(id) => act(() => deleteLesson(id), "Lesson deleted")}
+        onUpdate={(id, v, scope) =>
+          act(
+            () => updateLessonScope(id, v, scope),
+            scope === "occurrence"
+              ? "Lesson updated"
+              : "Repeated lessons updated",
+          )
+        }
+        onDelete={(id, scope) =>
+          act(
+            () => deleteLessonScope(id, scope),
+            scope === "occurrence"
+              ? "Lesson deleted"
+              : "Repeated lessons deleted",
+          )
+        }
       />
     ),
     students: (

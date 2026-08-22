@@ -264,14 +264,14 @@ export default function EditableSchedule({
           onClose={() => setEditing(null)}
           onSave={async (value) => {
             editing.id
-              ? await onUpdate(editing.id, value)
-              : await onCreate(value);
+              ? await onUpdate(editing.id, value.data, value.scope)
+              : await onCreate(value.data);
             setEditing(null);
           }}
           onDelete={
             editing.id
-              ? async () => {
-                  await onDelete(editing.id);
+              ? async (scope) => {
+                  await onDelete(editing.id, scope);
                   setEditing(null);
                 }
               : null
@@ -283,10 +283,14 @@ export default function EditableSchedule({
           move={pendingMove}
           onCancel={() => setPendingMove(null)}
           onSave={async () => {
-            await onUpdate(pendingMove.lesson.id, {
-              starts_at: pendingMove.starts_at,
-              ends_at: pendingMove.ends_at,
-            });
+            await onUpdate(
+              pendingMove.lesson.id,
+              {
+                starts_at: pendingMove.starts_at,
+                ends_at: pendingMove.ends_at,
+              },
+              "occurrence",
+            );
             setPendingMove(null);
           }}
         />
@@ -358,6 +362,7 @@ function LessonEditor({
   });
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
+  const [seriesScope, setSeriesScope] = useState("occurrence");
   const submit = async (e) => {
     e.preventDefault();
     setSaving(true);
@@ -367,7 +372,7 @@ function LessonEditor({
         throw new Error("Select at least one student or group.");
       const start = new Date(`${form.date}T${form.time}`);
       const end = new Date(start.getTime() + Number(form.duration) * 60000);
-      await onSave({
+      const data = {
         subject_id: form.subject_id || null,
         student_ids: form.available ? [] : form.student_ids,
         group_ids: form.available ? [] : form.group_ids,
@@ -376,6 +381,10 @@ function LessonEditor({
         available: form.available,
         notes: form.notes || null,
         ...(!lesson ? { recurrence_weeks: Number(form.recurrence_weeks) } : {}),
+      };
+      await onSave({
+        data,
+        scope: lesson?.recurrence_series_id ? seriesScope : "occurrence",
       });
     } catch (err) {
       setError(err.message);
@@ -481,6 +490,19 @@ function LessonEditor({
             onChange={(e) => setForm({ ...form, notes: e.target.value })}
           />
         </Field>
+        {lesson?.recurrence_series_id && (
+          <Field label="Apply changes to">
+            <select
+              className={inputClass}
+              value={seriesScope}
+              onChange={(e) => setSeriesScope(e.target.value)}
+            >
+              <option value="occurrence">Only this lesson</option>
+              <option value="future">This and following lessons</option>
+              <option value="series">All lessons in this series</option>
+            </select>
+          </Field>
+        )}
         {error && (
           <p className="mb-3 text-xs text-[#a35645] bg-[#f3e3de] rounded-xl p-3">
             {error}
@@ -491,7 +513,13 @@ function LessonEditor({
             <button
               type="button"
               onClick={() =>
-                confirm("Delete this lesson permanently?") && onDelete()
+                confirm(
+                  seriesScope === "occurrence"
+                    ? "Delete only this lesson?"
+                    : seriesScope === "future"
+                      ? "Delete this and all following lessons in the series?"
+                      : "Delete every lesson in this repeated series?",
+                ) && onDelete(seriesScope)
               }
               className="h-11 px-4 rounded-xl border border-[#dabfb6] bg-[#f6ebe7] text-[#995848] text-sm"
             >
