@@ -13,6 +13,7 @@ import {
   updateLesson,
   updateLessonScope,
   updateSubject,
+  updateGroup,
 } from "./lib/api";
 import Auth from "./Auth";
 import EditableSchedule from "./components/EditableSchedule";
@@ -1015,6 +1016,7 @@ function Subjects({
   onSubject,
   onUpdateSubject,
   onGroup,
+  onUpdateGroup,
   students,
 }) {
   const [subjectName, setSubjectName] = useState("");
@@ -1022,6 +1024,7 @@ function Subjects({
   const [groupName, setGroupName] = useState("");
   const [groupSubject, setGroupSubject] = useState(subjects[0]?.id || "");
   const [groupMembers, setGroupMembers] = useState([]);
+  const [editingGroup, setEditingGroup] = useState(null);
   return (
     <div className="p-5 md:p-8 max-w-[1400px] mx-auto animate-in">
       <form
@@ -1173,7 +1176,16 @@ function Subjects({
         <div className="grid sm:grid-cols-2 gap-4 mt-6">
           {groups.map((g) => (
             <div key={g.id} className="rounded-2xl bg-[#f1efe9] p-5">
-              <b className="text-sm">{g.name}</b>
+              <div className="flex items-center justify-between">
+                <b className="text-sm">{g.name}</b>
+                <button
+                  onClick={() => setEditingGroup(g)}
+                  className="w-8 h-8 rounded-lg border-0 bg-white grid place-items-center"
+                  title="Edit group"
+                >
+                  <Icon size={17}>edit</Icon>
+                </button>
+              </div>
               <p className="text-xs text-[#888] mt-1">
                 {g.subject?.name || "No subject"} · {g.members?.length || 0}{" "}
                 students
@@ -1182,7 +1194,111 @@ function Subjects({
           ))}
         </div>
       </div>
+      {editingGroup && (
+        <GroupEditor
+          group={editingGroup}
+          subjects={subjects}
+          students={students}
+          onClose={() => setEditingGroup(null)}
+          onSave={async (values) => {
+            await onUpdateGroup(editingGroup.id, values);
+            setEditingGroup(null);
+          }}
+        />
+      )}
     </div>
+  );
+}
+
+function GroupEditor({ group, subjects, students, onClose, onSave }) {
+  const [form, setForm] = useState({
+    name: group.name,
+    subject_id: group.subject_id || "",
+    student_ids: (group.members || []).map((member) => member.student_id),
+  });
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState("");
+  const toggle = (id) =>
+    setForm({
+      ...form,
+      student_ids: form.student_ids.includes(id)
+        ? form.student_ids.filter((value) => value !== id)
+        : [...form.student_ids, id],
+    });
+  return (
+    <ModalShell title="Edit group" onClose={onClose}>
+      <form
+        onSubmit={async (e) => {
+          e.preventDefault();
+          setSaving(true);
+          setError("");
+          try {
+            await onSave(form);
+          } catch (requestError) {
+            setError(requestError.message);
+            setSaving(false);
+          }
+        }}
+      >
+        <Field label="Group name">
+          <input
+            required
+            className={inputClass}
+            value={form.name}
+            onChange={(e) => setForm({ ...form, name: e.target.value })}
+          />
+        </Field>
+        <Field label="Subject">
+          <select
+            required
+            className={inputClass}
+            value={form.subject_id}
+            onChange={(e) => setForm({ ...form, subject_id: e.target.value })}
+          >
+            <option value="">Select subject</option>
+            {subjects.map((subject) => (
+              <option key={subject.id} value={subject.id}>
+                {subject.name}
+              </option>
+            ))}
+          </select>
+        </Field>
+        <div className="mb-5 rounded-2xl border border-[#dedbd3] bg-white p-4">
+          <div className="flex justify-between mb-3">
+            <p className="text-xs font-semibold">Group members</p>
+            <span className="text-[10px] bg-[#efede7] rounded-full px-2 py-1">
+              {form.student_ids.length} selected
+            </span>
+          </div>
+          <div className="grid sm:grid-cols-2 gap-x-4 max-h-52 overflow-auto">
+            {students.map((student) => (
+              <label
+                key={student.id}
+                className="flex items-center gap-2 py-2 text-xs"
+              >
+                <input
+                  type="checkbox"
+                  checked={form.student_ids.includes(student.id)}
+                  onChange={() => toggle(student.id)}
+                />
+                {student.first_name} {student.last_name}
+              </label>
+            ))}
+          </div>
+        </div>
+        {error && (
+          <p className="mb-3 text-xs text-[#a35645] bg-[#f3e3de] rounded-xl p-3">
+            {error}
+          </p>
+        )}
+        <button
+          disabled={saving}
+          className="w-full h-11 rounded-xl border-0 bg-[#30312d] text-white text-sm font-semibold"
+        >
+          {saving ? "Saving…" : "Save group"}
+        </button>
+      </form>
+    </ModalShell>
   );
 }
 
@@ -1478,6 +1594,9 @@ export default function App() {
           act(() => updateSubject(id, values), "Subject updated")
         }
         onGroup={(v) => act(() => createGroup(v), "Group created")}
+        onUpdateGroup={(id, values) =>
+          act(() => updateGroup(id, values), "Group updated")
+        }
       />
     ),
   };

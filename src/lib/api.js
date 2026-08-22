@@ -293,6 +293,27 @@ export async function createGroup(input) {
   return data;
 }
 
+export async function updateGroup(id, input) {
+  const db = requireClient();
+  const { student_ids = [], ...group } = input;
+  const { error } = await db
+    .from("groups")
+    .update({ name: group.name, subject_id: group.subject_id || null })
+    .eq("id", id);
+  if (error) throw error;
+  const { error: removeError } = await db
+    .from("group_members")
+    .delete()
+    .eq("group_id", id);
+  if (removeError) throw removeError;
+  if (student_ids.length) {
+    const { error: memberError } = await db
+      .from("group_members")
+      .insert(student_ids.map((student_id) => ({ group_id: id, student_id })));
+    if (memberError) throw memberError;
+  }
+}
+
 export async function createPayment(input) {
   const db = requireClient();
   const {
