@@ -31,7 +31,7 @@ export async function getWorkspace() {
       db
         .from("lessons")
         .select(
-          "*, subject:subjects(name,icon), student:profiles!lessons_student_id_fkey(first_name,last_name), group:groups(name), student_audiences:lesson_students(student_id,student:profiles(first_name,last_name)), group_audiences:lesson_groups(group_id,group:groups(name))",
+          "*, subject:subjects!lessons_subject_id_fkey(name,icon), student:profiles!lessons_student_id_fkey(first_name,last_name), group:groups!lessons_group_id_fkey(name), student_audiences:lesson_students!lesson_students_lesson_id_fkey(student_id,student:profiles!lesson_students_student_id_fkey(first_name,last_name)), group_audiences:lesson_groups!lesson_groups_lesson_id_fkey(group_id,group:groups!lesson_groups_group_id_fkey(name))",
         )
         .eq("teacher_id", user.id)
         .order("starts_at"),
