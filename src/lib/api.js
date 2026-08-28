@@ -137,6 +137,25 @@ export async function createStudent(input) {
   return data;
 }
 
+export async function resetStudentPassword(studentId, password) {
+  const db = requireClient();
+  const { data, error } = await db.functions.invoke("reset-student-password", {
+    body: { student_id: studentId, password },
+  });
+  if (error) {
+    let message = error.message;
+    try {
+      const payload = await error.context?.json();
+      message = payload?.error || payload?.message || message;
+    } catch {
+      /* Response body was not JSON. */
+    }
+    throw new Error(message);
+  }
+  if (data?.error) throw new Error(data.error);
+  return data;
+}
+
 export async function updateStudent(id, input) {
   const db = requireClient();
   const { subject_ids = [], group_ids = [], ...profile } = input;

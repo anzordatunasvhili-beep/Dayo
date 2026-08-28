@@ -16,6 +16,7 @@ import {
   updateSubject,
   updateGroup,
   updateStudent,
+  resetStudentPassword,
   updateRedZone,
   deleteRedZone,
   setStudentSubjectPrice,
@@ -35,6 +36,7 @@ const nav = [
   ["students", "group", "Students"],
   ["payments", "account_balance_wallet", "Payments"],
   ["subjects", "menu_book", "Subjects & groups"],
+  ["account", "manage_accounts", "Account"],
 ];
 const mondayOf = (date) => {
   const d = new Date(date);
@@ -62,7 +64,7 @@ const colorMap = {
   rose: "bg-[#efdfda] border-[#dabfb6]",
 };
 
-function Sidebar({ page, setPage, open, setOpen, profile }) {
+function Sidebar({ page, setPage, open, setOpen, profile, paymentsDue }) {
   const visibleNav =
     profile?.role === "student" ? nav.filter(([id]) => id !== "students") : nav;
   return (
@@ -103,9 +105,9 @@ function Sidebar({ page, setPage, open, setOpen, profile }) {
             {profile?.role === "student" && id === "subjects"
               ? "My subjects"
               : label}
-            {id === "payments" && (
+            {id === "payments" && paymentsDue > 0 && (
               <span className="ml-auto text-[10px] bg-[#e8d7c8] px-2 py-0.5 rounded-full">
-                2 due
+                {paymentsDue} due
               </span>
             )}
           </button>
@@ -577,7 +579,7 @@ function LessonModal({ onClose, onSave, students, subjects, groups }) {
   );
 }
 
-function Students({ students, onCreate, onUpdate, subjects, groups, profile }) {
+function Students({ students, onCreate, onUpdate, onResetPassword, subjects, groups, profile }) {
   const [query, setQuery] = useState("");
   const [modal, setModal] = useState(false);
   const [editingStudent, setEditingStudent] = useState(null);
@@ -688,6 +690,7 @@ function Students({ students, onCreate, onUpdate, subjects, groups, profile }) {
             await onUpdate(editingStudent.id, values);
             setEditingStudent(null);
           }}
+          onResetPassword={(password) => onResetPassword(editingStudent.id, password)}
         />
       )}
     </div>
@@ -894,7 +897,7 @@ function lessonChargeSummary(students, lessons, prices, payments) {
   });
 }
 
-function StudentEditor({ student, subjects, groups, onClose, onSave }) {
+function StudentEditor({ student, subjects, groups, onClose, onSave, onResetPassword }) {
   const [form, setForm] = useState({
     first_name: student.first_name,
     last_name: student.last_name,
@@ -904,6 +907,8 @@ function StudentEditor({ student, subjects, groups, onClose, onSave }) {
   });
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
+  const [password, setPassword] = useState("");
+  const [resettingPassword, setResettingPassword] = useState(false);
   const toggle = (field, id) =>
     setForm({
       ...form,
@@ -993,6 +998,37 @@ function StudentEditor({ student, subjects, groups, onClose, onSave }) {
             {error}
           </p>
         )}
+        <div className="mt-5 pt-5 border-t border-[#efede8]">
+          <Field label="New password">
+            <input
+              type="password"
+              minLength="8"
+              className={inputClass}
+              placeholder="At least 8 characters"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+            />
+          </Field>
+          <button
+            type="button"
+            disabled={resettingPassword || password.length < 8}
+            onClick={async () => {
+              setResettingPassword(true);
+              setError("");
+              try {
+                await onResetPassword(password);
+                setPassword("");
+              } catch (requestError) {
+                setError(requestError.message);
+              } finally {
+                setResettingPassword(false);
+              }
+            }}
+            className="mt-1 h-10 px-3 rounded-xl border border-[#d9d6ce] bg-white text-xs font-semibold disabled:opacity-50"
+          >
+            {resettingPassword ? "Resetting…" : "Set student password"}
+          </button>
+        </div>
         <button
           disabled={saving}
           className="w-full h-11 rounded-xl border-0 bg-[#30312d] text-white text-sm font-semibold"
@@ -1207,6 +1243,7 @@ function Payments({
             await onPrice(value);
             setPriceModal(false);
           }}
+          onResetPassword={(password) => onResetPassword(editingStudent.id, password)}
         />
       )}
     </div>
@@ -1868,6 +1905,76 @@ function StudentSubjects({ subjects, groups }) {
   );
 }
 
+function Account({ profile, onPasswordChange }) {
+  const [password, setPassword] = useState("");
+  const [confirmation, setConfirmation] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [message, setMessage] = useState("");
+  const [error, setError] = useState("");
+  return (
+    <div className="p-5 md:p-8 max-w-[760px] mx-auto animate-in">
+      <div className="bg-white border border-[#e7e4dd] rounded-[24px] p-5 md:p-7">
+        <h2 className="font-semibold">Account security</h2>
+        <p className="text-xs text-[#92938b] mt-1 mb-6">
+          Signed in as {profile.email || "your Dayo account"}.
+        </p>
+        <form
+          onSubmit={async (event) => {
+            event.preventDefault();
+            setMessage("");
+            setError("");
+            if (password !== confirmation) {
+              setError("Passwords do not match.");
+              return;
+            }
+            setSaving(true);
+            try {
+              await onPasswordChange(password);
+              setPassword("");
+              setConfirmation("");
+              setMessage("Password updated.");
+            } catch (requestError) {
+              setError(requestError.message);
+            } finally {
+              setSaving(false);
+            }
+          }}
+          className="max-w-md space-y-4"
+        >
+          <Field label="New password">
+            <input
+              required
+              type="password"
+              minLength="8"
+              className={inputClass}
+              value={password}
+              onChange={(event) => setPassword(event.target.value)}
+            />
+          </Field>
+          <Field label="Confirm new password">
+            <input
+              required
+              type="password"
+              minLength="8"
+              className={inputClass}
+              value={confirmation}
+              onChange={(event) => setConfirmation(event.target.value)}
+            />
+          </Field>
+          {error && <p className="text-xs text-[#a35645]">{error}</p>}
+          {message && <p className="text-xs text-[#5f816b]">{message}</p>}
+          <button
+            disabled={saving}
+            className="h-11 px-4 rounded-xl border-0 bg-[#30312d] text-white text-sm font-semibold disabled:opacity-50"
+          >
+            {saving ? "Updating…" : "Update password"}
+          </button>
+        </form>
+      </div>
+    </div>
+  );
+}
+
 export default function App() {
   const [session, setSession] = useState(undefined);
   const [data, setData] = useState(null);
@@ -1912,6 +2019,10 @@ export default function App() {
       setError(e.message);
       throw e;
     }
+  };
+  const updatePassword = async (password) => {
+    const { error: passwordError } = await supabase.auth.updateUser({ password });
+    if (passwordError) throw passwordError;
   };
   if (session === undefined) return <Loading />;
   if (!session) return <Auth />;
@@ -1986,6 +2097,9 @@ export default function App() {
         onUpdate={(id, values) =>
           act(() => updateStudent(id, values), "Student updated")
         }
+        onResetPassword={(id, password) =>
+          act(() => resetStudentPassword(id, password), "Student password reset")
+        }
       />
     ),
     payments: (
@@ -2019,6 +2133,7 @@ export default function App() {
         }
       />
     ),
+    account: <Account profile={data.profile} onPasswordChange={updatePassword} />,
   };
   const studentContent = {
     dashboard: <StudentDashboard data={data} setPage={setPage} />,
@@ -2038,9 +2153,11 @@ export default function App() {
         lessons={data.lessons}
         prices={data.prices}
         profile={data.profile}
+        paymentsDue={data.payments.filter((payment) => payment.status !== "paid").length}
       />
     ),
     subjects: <StudentSubjects subjects={data.subjects} groups={data.groups} />,
+    account: <Account profile={data.profile} onPasswordChange={updatePassword} />,
   };
   const content =
     (data.profile.role === "student" ? studentContent : teacherContent)[page] ||
@@ -2055,6 +2172,7 @@ export default function App() {
         open={menu}
         setOpen={setMenu}
         profile={data.profile}
+        paymentsDue={data.payments.filter((payment) => payment.status !== "paid").length}
       />
       {menu && (
         <div
