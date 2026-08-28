@@ -7,6 +7,17 @@ const cors = {
     "authorization, x-client-info, apikey, content-type",
 };
 
+const normalizeLiveKitUrl = (value: string) => {
+  const withProtocol = value.includes("://") ? value : `wss://${value}`;
+  const url = new URL(withProtocol);
+  if (url.protocol === "https:") url.protocol = "wss:";
+  if (url.protocol === "http:") url.protocol = "ws:";
+  if (url.protocol !== "wss:" && url.protocol !== "ws:") {
+    throw new Error("LIVEKIT_URL must use wss:// for production or ws:// for local testing.");
+  }
+  return url.toString().replace(/\/$/, "");
+};
+
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: cors });
   try {
@@ -17,6 +28,7 @@ Deno.serve(async (req) => {
     const livekitUrl = Deno.env.get("LIVEKIT_URL");
     if (!apiKey || !apiSecret || !livekitUrl)
       throw new Error("LiveKit is not configured on the server.");
+    const normalizedLiveKitUrl = normalizeLiveKitUrl(livekitUrl);
 
     const authorization = req.headers.get("Authorization") || "";
     const caller = createClient(url, anon, {
@@ -45,7 +57,7 @@ Deno.serve(async (req) => {
       metadata: JSON.stringify({ role: profile?.role || "student", lesson_id: lessonId }),
     });
     token.addGrant({ roomJoin: true, room: `lesson_${lessonId}` });
-    return new Response(JSON.stringify({ token: await token.toJwt(), url: livekitUrl }), {
+    return new Response(JSON.stringify({ token: await token.toJwt(), url: normalizedLiveKitUrl }), {
       headers: { ...cors, "Content-Type": "application/json" },
     });
   } catch (error) {

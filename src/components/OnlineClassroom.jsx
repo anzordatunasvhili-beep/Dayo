@@ -172,7 +172,14 @@ export default function OnlineClassroom({ lesson, profile, onLeave }) {
         setLocal(room.localParticipant);
         setParticipants([...room.remoteParticipants.values()]);
         setStatus("connected");
-      } catch (error) { setStatus(error.message); }
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        setStatus(
+          message.includes("could not establish signal connection")
+            ? `${message}. Check that LIVEKIT_URL is a public wss:// URL with valid TLS and WebSocket forwarding enabled.`
+            : message,
+        );
+      }
     };
     connect();
     return () => { active = false; room.disconnect(); if (realtime) { realtime.untrack(); supabase.removeChannel(realtime); } };

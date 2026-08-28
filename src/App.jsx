@@ -1727,9 +1727,17 @@ function GroupEditor({ group, subjects, students, onClose, onSave }) {
 }
 
 function StudentDashboard({ data, setPage }) {
+  const now = new Date();
+  const current = data.lessons.find(
+    (lesson) =>
+      new Date(lesson.starts_at) <= now && new Date(lesson.ends_at) >= now,
+  );
   const upcoming = data.lessons
-    .filter((lesson) => new Date(lesson.starts_at) >= new Date())
-    .slice(0, 4);
+    .filter(
+      (lesson) => lesson.id !== current?.id && new Date(lesson.ends_at) >= now,
+    )
+    .slice(0, current ? 3 : 4);
+  const visibleLessons = current ? [current, ...upcoming] : upcoming;
   const due = data.payments
     .filter((payment) => payment.status !== "paid")
     .reduce((sum, payment) => sum + Number(payment.amount), 0);
@@ -1739,8 +1747,8 @@ function StudentDashboard({ data, setPage }) {
         <Stat
           icon="calendar_month"
           label="Upcoming lessons"
-          value={upcoming.length}
-          note="next sessions"
+          value={visibleLessons.length}
+          note={current ? "live and next" : "next sessions"}
           tint="bg-[#e2ebe5]"
         />
         <Stat
@@ -1773,8 +1781,8 @@ function StudentDashboard({ data, setPage }) {
             View schedule
           </button>
         </div>
-        {upcoming.length ? (
-          upcoming.map((lesson) => (
+        {visibleLessons.length ? (
+          visibleLessons.map((lesson) => (
             <div
               key={lesson.id}
               className="flex items-center gap-4 py-4 border-t border-[#efede8]"
@@ -1784,6 +1792,11 @@ function StudentDashboard({ data, setPage }) {
               </div>
               <div className="flex-1">
                 <p className="text-sm font-semibold">
+                  {lesson.id === current?.id && (
+                    <span className="mr-2 rounded-full bg-[#f3e3de] px-2 py-0.5 text-[9px] font-bold text-[#a35645]">
+                      LIVE NOW
+                    </span>
+                  )}
                   {lesson.subject?.name || "Lesson"}
                 </p>
                 <p className="text-xs text-[#999] mt-1">
@@ -1798,8 +1811,8 @@ function StudentDashboard({ data, setPage }) {
               </div>
               <button
                 onClick={() => setPage(`classroom:${lesson.id}`)}
-                title="Join lesson"
-                aria-label="Join lesson"
+                title={lesson.id === current?.id ? "Join current class" : "Join lesson"}
+                aria-label={lesson.id === current?.id ? "Join current class" : "Join lesson"}
                 className="w-9 h-9 grid place-items-center rounded-lg bg-[#f1efe9]"
               >
                 <Icon size={17}>videocam</Icon>

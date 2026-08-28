@@ -8,6 +8,26 @@ const requireClient = () => {
   return supabase;
 };
 
+const invokeFunction = async (name, options) => {
+  const { data, error } = await requireClient().functions.invoke(name, options);
+  if (!error) {
+    if (data?.error) throw new Error(data.error);
+    return data;
+  }
+
+  let message = error.message;
+  try {
+    const payload = await error.context?.json();
+    message = payload?.error || payload?.message || message;
+    if (payload?.code === "NOT_FOUND") {
+      message = `Supabase Edge Function "${name}" is not deployed. Deploy it with: npx supabase functions deploy ${name}`;
+    }
+  } catch {
+    /* Response body was not JSON. */
+  }
+  throw new Error(message);
+};
+
 export async function getWorkspace() {
   const db = requireClient();
   const {
@@ -119,41 +139,15 @@ export async function getWorkspace() {
 }
 
 export async function createStudent(input) {
-  const db = requireClient();
-  const { data, error } = await db.functions.invoke("create-student", {
+  return invokeFunction("create-student", {
     body: input,
   });
-  if (error) {
-    let message = error.message;
-    try {
-      const payload = await error.context?.json();
-      message = payload?.error || payload?.message || message;
-    } catch {
-      /* Response body was not JSON. */
-    }
-    throw new Error(message);
-  }
-  if (data?.error) throw new Error(data.error);
-  return data;
 }
 
 export async function resetStudentPassword(studentId, password) {
-  const db = requireClient();
-  const { data, error } = await db.functions.invoke("reset-student-password", {
+  return invokeFunction("reset-student-password", {
     body: { student_id: studentId, password },
   });
-  if (error) {
-    let message = error.message;
-    try {
-      const payload = await error.context?.json();
-      message = payload?.error || payload?.message || message;
-    } catch {
-      /* Response body was not JSON. */
-    }
-    throw new Error(message);
-  }
-  if (data?.error) throw new Error(data.error);
-  return data;
 }
 
 export async function updateStudent(id, input) {
@@ -210,13 +204,9 @@ export async function updateOwnProfile(input) {
 }
 
 export async function getLiveKitToken(lessonId) {
-  const db = requireClient();
-  const { data, error } = await db.functions.invoke("create-livekit-token", {
+  return invokeFunction("create-livekit-token", {
     body: { lesson_id: lessonId },
   });
-  if (error) throw error;
-  if (data?.error) throw new Error(data.error);
-  return data;
 }
 
 export async function getClassroomData(lessonId) {
