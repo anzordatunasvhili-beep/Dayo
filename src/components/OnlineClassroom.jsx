@@ -45,7 +45,15 @@ function participantRole(participant) {
   }
 }
 
-function ParticipantTile({ participant, source, compact = false, selected = false, onSelect }) {
+function ParticipantTile({
+  participant,
+  source,
+  compact = false,
+  selected = false,
+  speaking = false,
+  level = 0,
+  onSelect,
+}) {
   const videoRef = useRef(null);
   const [publication, setPublication] = useState(null);
 
@@ -81,8 +89,16 @@ function ParticipantTile({ participant, source, compact = false, selected = fals
       onClick={onSelect}
       className={`relative block aspect-video w-full overflow-hidden rounded-2xl bg-[#20211d] text-left shadow-sm ${
         selected ? "ring-2 ring-[#8f9d92]" : ""
+      } ${
+        speaking ? "shadow-[0_0_0_3px_rgba(143,157,146,.45),0_18px_45px_rgba(82,115,93,.24)]" : ""
       }`}
     >
+      {speaking && (
+        <div
+          className="absolute inset-0 animate-pulse rounded-2xl border-2 border-[#b7d8bf]"
+          style={{ opacity: Math.max(0.45, Math.min(0.95, level + 0.35)) }}
+        />
+      )}
       {publication?.track ? (
         <video ref={videoRef} autoPlay playsInline className="h-full w-full object-cover" />
       ) : (
@@ -94,6 +110,17 @@ function ParticipantTile({ participant, source, compact = false, selected = fals
       )}
       <span className="absolute bottom-3 left-3 max-w-[80%] truncate rounded-full bg-black/65 px-3 py-1 text-[11px] font-semibold text-white">
         {participant.name || participant.identity}
+      </span>
+      <span className="absolute bottom-3 right-3 flex h-8 items-end gap-0.5 rounded-full bg-black/55 px-2 py-1.5">
+        {[0.35, 0.7, 1].map((multiplier) => (
+          <span
+            key={multiplier}
+            className={`w-1 rounded-full transition-all ${speaking ? "bg-[#b7d8bf]" : "bg-white/25"}`}
+            style={{
+              height: speaking ? `${8 + Math.round(level * 16 * multiplier)}px` : "5px",
+            }}
+          />
+        ))}
       </span>
     </button>
   );
@@ -482,6 +509,7 @@ export default function OnlineClassroom({ lesson, profile, onLeave }) {
   const [audioBlocked, setAudioBlocked] = useState(false);
   const [fullscreen, setFullscreen] = useState(false);
   const [focusedId, setFocusedId] = useState(null);
+  const [speakerLevels, setSpeakerLevels] = useState({});
   const endedRef = useRef(false);
 
   useEffect(() => {
@@ -504,6 +532,13 @@ export default function OnlineClassroom({ lesson, profile, onLeave }) {
       setScreen(room.localParticipant.isScreenShareEnabled);
     };
     const syncAudioPlayback = () => setAudioBlocked(!room.canPlaybackAudio);
+    const syncActiveSpeakers = (speakers) => {
+      const next = {};
+      speakers.forEach((participant) => {
+        next[participant.identity] = participant.audioLevel || 0.5;
+      });
+      setSpeakerLevels(next);
+    };
     const handleParticipantDisconnected = (participant) => {
       syncParticipants();
       if (profile.role !== "teacher" && participantRole(participant) === "teacher") {
@@ -552,6 +587,7 @@ export default function OnlineClassroom({ lesson, profile, onLeave }) {
         room.on(RoomEvent.LocalTrackPublished, syncLocalMedia);
         room.on(RoomEvent.LocalTrackUnpublished, syncLocalMedia);
         room.on(RoomEvent.AudioPlaybackStatusChanged, syncAudioPlayback);
+        room.on(RoomEvent.ActiveSpeakersChanged, syncActiveSpeakers);
         await room.connect(url, token);
         if (!active) return;
         setLocal(room.localParticipant);
@@ -577,6 +613,7 @@ export default function OnlineClassroom({ lesson, profile, onLeave }) {
       room.off(RoomEvent.LocalTrackPublished, syncLocalMedia);
       room.off(RoomEvent.LocalTrackUnpublished, syncLocalMedia);
       room.off(RoomEvent.AudioPlaybackStatusChanged, syncAudioPlayback);
+      room.off(RoomEvent.ActiveSpeakersChanged, syncActiveSpeakers);
       room.disconnect();
       if (realtime) {
         if (profile.role === "teacher" && !endedRef.current) {
@@ -679,6 +716,16 @@ export default function OnlineClassroom({ lesson, profile, onLeave }) {
     else await document.exitFullscreen();
   };
 
+  const startSound = async () => {
+    try {
+      await room.startAudio();
+      setAudioBlocked(!room.canPlaybackAudio);
+      setNotice("");
+    } catch (error) {
+      setNotice(error.message || "Audio playback is blocked by this browser.");
+    }
+  };
+
   const send = async (event) => {
     event.preventDefault();
     if (!message.trim()) return;
@@ -726,6 +773,8 @@ export default function OnlineClassroom({ lesson, profile, onLeave }) {
             participant={focused}
             source={source}
             selected
+            speaking={Boolean(speakerLevels[focused.identity])}
+            level={speakerLevels[focused.identity] || 0}
             onSelect={() => setFocusedId(focused.identity)}
           />
         </div>
@@ -737,6 +786,8 @@ export default function OnlineClassroom({ lesson, profile, onLeave }) {
                   participant={item}
                   source={source}
                   compact
+                  speaking={Boolean(speakerLevels[item.identity])}
+                  level={speakerLevels[item.identity] || 0}
                   onSelect={() => setFocusedId(item.identity)}
                 />
               </div>
@@ -789,8 +840,15 @@ export default function OnlineClassroom({ lesson, profile, onLeave }) {
         </div>
       )}
       {audioBlocked && (
-        <div className="rounded-xl border border-[#d5deec] bg-[#eef4ff] px-4 py-2 text-xs font-semibold text-[#435a74]">
-          Audio playback is blocked by this browser. Tap Unmute to enable classroom sound.
+        <div className="flex flex-wrap items-center gap-3 rounded-xl border border-[#d5deec] bg-[#eef4ff] px-4 py-2 text-xs font-semibold text-[#435a74]">
+          <span>Audio playback is blocked by this browser.</span>
+          <button
+            onClick={startSound}
+            className="flex h-8 items-center gap-1 rounded-lg bg-[#435a74] px-3 text-white"
+          >
+            <Icon size={16}>volume_up</Icon>
+            Start sound
+          </button>
         </div>
       )}
       <div aria-hidden="true" className="fixed h-0 w-0 overflow-hidden">
@@ -834,8 +892,10 @@ export default function OnlineClassroom({ lesson, profile, onLeave }) {
             <p className="mb-2 text-xs font-bold text-[#30312d]">Participants</p>
             {allParticipants.map((item) => (
               <div key={item.identity} className="flex items-center gap-2 border-t border-[#eee] py-2 text-xs">
-                <span className="grid h-7 w-7 place-items-center rounded-full bg-[#e2ebe5] text-[#52735d]">
-                  <Icon size={16}>person</Icon>
+                <span className={`grid h-7 w-7 place-items-center rounded-full ${
+                  speakerLevels[item.identity] ? "animate-pulse bg-[#d8efd8] text-[#52735d]" : "bg-[#e2ebe5] text-[#52735d]"
+                }`}>
+                  <Icon size={16}>{speakerLevels[item.identity] ? "graphic_eq" : "person"}</Icon>
                 </span>
                 <span className="truncate">{item.name || item.identity}</span>
               </div>
