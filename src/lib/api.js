@@ -196,6 +196,19 @@ export async function updateStudent(id, input) {
   }
 }
 
+export async function updateOwnProfile(input) {
+  const db = requireClient();
+  const {
+    data: { user },
+  } = await db.auth.getUser();
+  if (!user) throw new Error("You are not signed in.");
+  const { error } = await db
+    .from("profiles")
+    .update({ first_name: input.first_name, last_name: input.last_name })
+    .eq("id", user.id);
+  if (error) throw error;
+}
+
 export async function createLesson(input) {
   const db = requireClient();
   const {

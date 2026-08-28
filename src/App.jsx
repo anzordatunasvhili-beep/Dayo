@@ -16,6 +16,7 @@ import {
   updateSubject,
   updateGroup,
   updateStudent,
+  updateOwnProfile,
   resetStudentPassword,
   updateRedZone,
   deleteRedZone,
@@ -1905,7 +1906,9 @@ function StudentSubjects({ subjects, groups }) {
   );
 }
 
-function Account({ profile, onPasswordChange }) {
+function Account({ profile, onPasswordChange, onProfileChange }) {
+  const [firstName, setFirstName] = useState(profile.first_name);
+  const [lastName, setLastName] = useState(profile.last_name);
   const [password, setPassword] = useState("");
   const [confirmation, setConfirmation] = useState("");
   const [saving, setSaving] = useState(false);
@@ -1923,16 +1926,19 @@ function Account({ profile, onPasswordChange }) {
             event.preventDefault();
             setMessage("");
             setError("");
-            if (password !== confirmation) {
+            if (password && password !== confirmation) {
               setError("Passwords do not match.");
               return;
             }
             setSaving(true);
             try {
-              await onPasswordChange(password);
-              setPassword("");
-              setConfirmation("");
-              setMessage("Password updated.");
+              await onProfileChange({ first_name: firstName, last_name: lastName });
+              if (password) {
+                await onPasswordChange(password);
+                setPassword("");
+                setConfirmation("");
+              }
+              setMessage(password ? "Account and password updated." : "Account updated.");
             } catch (requestError) {
               setError(requestError.message);
             } finally {
@@ -1941,11 +1947,28 @@ function Account({ profile, onPasswordChange }) {
           }}
           className="max-w-md space-y-4"
         >
-          <Field label="New password">
+          <div className="grid grid-cols-2 gap-3">
+            <Field label="First name">
+              <input
+                required
+                className={inputClass}
+                value={firstName}
+                onChange={(event) => setFirstName(event.target.value)}
+              />
+            </Field>
+            <Field label="Last name">
+              <input
+                required
+                className={inputClass}
+                value={lastName}
+                onChange={(event) => setLastName(event.target.value)}
+              />
+            </Field>
+          </div>
+          <Field label="New password (optional)">
             <input
-              required
               type="password"
-              minLength="8"
+              minLength={password ? "8" : undefined}
               className={inputClass}
               value={password}
               onChange={(event) => setPassword(event.target.value)}
@@ -1953,9 +1976,8 @@ function Account({ profile, onPasswordChange }) {
           </Field>
           <Field label="Confirm new password">
             <input
-              required
               type="password"
-              minLength="8"
+              minLength={password ? "8" : undefined}
               className={inputClass}
               value={confirmation}
               onChange={(event) => setConfirmation(event.target.value)}
@@ -1967,7 +1989,7 @@ function Account({ profile, onPasswordChange }) {
             disabled={saving}
             className="h-11 px-4 rounded-xl border-0 bg-[#30312d] text-white text-sm font-semibold disabled:opacity-50"
           >
-            {saving ? "Updating…" : "Update password"}
+            {saving ? "Saving…" : "Save account"}
           </button>
         </form>
       </div>
@@ -2024,6 +2046,8 @@ export default function App() {
     const { error: passwordError } = await supabase.auth.updateUser({ password });
     if (passwordError) throw passwordError;
   };
+  const updateProfile = (profileValues) =>
+    act(() => updateOwnProfile(profileValues), "Account updated");
   if (session === undefined) return <Loading />;
   if (!session) return <Auth />;
   if (!data) return <Loading error={error} />;
@@ -2133,7 +2157,13 @@ export default function App() {
         }
       />
     ),
-    account: <Account profile={data.profile} onPasswordChange={updatePassword} />,
+    account: (
+      <Account
+        profile={data.profile}
+        onPasswordChange={updatePassword}
+        onProfileChange={updateProfile}
+      />
+    ),
   };
   const studentContent = {
     dashboard: <StudentDashboard data={data} setPage={setPage} />,
@@ -2157,7 +2187,13 @@ export default function App() {
       />
     ),
     subjects: <StudentSubjects subjects={data.subjects} groups={data.groups} />,
-    account: <Account profile={data.profile} onPasswordChange={updatePassword} />,
+    account: (
+      <Account
+        profile={data.profile}
+        onPasswordChange={updatePassword}
+        onProfileChange={updateProfile}
+      />
+    ),
   };
   const content =
     (data.profile.role === "student" ? studentContent : teacherContent)[page] ||
