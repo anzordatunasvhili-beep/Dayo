@@ -37,6 +37,12 @@ function isPermissionError(error) {
   return ["NotAllowedError", "PermissionDeniedError"].includes(error?.name);
 }
 
+async function requestMicrophonePermission() {
+  if (!navigator.mediaDevices?.getUserMedia) return;
+  const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+  stream.getTracks().forEach((track) => track.stop());
+}
+
 function participantRole(participant) {
   try {
     return JSON.parse(participant.metadata || "{}").role;
@@ -89,16 +95,8 @@ function ParticipantTile({
       onClick={onSelect}
       className={`relative block aspect-video w-full overflow-hidden rounded-2xl bg-[#20211d] text-left shadow-sm ${
         selected ? "ring-2 ring-[#8f9d92]" : ""
-      } ${
-        speaking ? "shadow-[0_0_0_3px_rgba(143,157,146,.45),0_18px_45px_rgba(82,115,93,.24)]" : ""
       }`}
     >
-      {speaking && (
-        <div
-          className="absolute inset-0 animate-pulse rounded-2xl border-2 border-[#b7d8bf]"
-          style={{ opacity: Math.max(0.45, Math.min(0.95, level + 0.35)) }}
-        />
-      )}
       {publication?.track ? (
         <video ref={videoRef} autoPlay playsInline className="h-full w-full object-cover" />
       ) : (
@@ -111,16 +109,13 @@ function ParticipantTile({
       <span className="absolute bottom-3 left-3 max-w-[80%] truncate rounded-full bg-black/65 px-3 py-1 text-[11px] font-semibold text-white">
         {participant.name || participant.identity}
       </span>
-      <span className="absolute bottom-3 right-3 flex h-8 items-end gap-0.5 rounded-full bg-black/55 px-2 py-1.5">
-        {[0.35, 0.7, 1].map((multiplier) => (
-          <span
-            key={multiplier}
-            className={`w-1 rounded-full transition-all ${speaking ? "bg-[#b7d8bf]" : "bg-white/25"}`}
-            style={{
-              height: speaking ? `${8 + Math.round(level * 16 * multiplier)}px` : "5px",
-            }}
-          />
-        ))}
+      <span className="absolute inset-x-3 bottom-1.5 h-1.5 overflow-hidden rounded-full bg-white/15">
+        <span
+          className={`block h-full rounded-full transition-all ${
+            speaking ? "bg-[#b7d8bf]" : "bg-white/25"
+          }`}
+          style={{ width: speaking ? `${Math.max(28, Math.min(100, 42 + level * 90))}%` : "12%" }}
+        />
       </span>
     </button>
   );
@@ -328,8 +323,8 @@ function Whiteboard({ lessonId, board, onBoardChange, canEdit }) {
 
   return (
     <div className="flex h-full min-h-0 flex-col overflow-hidden rounded-2xl border border-[#e5e2dc] bg-white">
-      <div className="flex flex-wrap items-center gap-2 border-b border-[#eee] bg-[#fbfaf7] p-2">
-        <div className="flex flex-wrap gap-1">
+      <div className="flex items-center gap-2 overflow-x-auto border-b border-[#eee] bg-[#fbfaf7] p-2">
+        <div className="flex shrink-0 gap-1">
           {drawingTools.map((item) => (
             <button
               key={item.id}
@@ -370,7 +365,7 @@ function Whiteboard({ lessonId, board, onBoardChange, canEdit }) {
             className="w-24 accent-[#30312d]"
           />
         </label>
-        <div className="ml-auto flex gap-1">
+        <div className="ml-auto flex shrink-0 gap-1">
           <button
             disabled={!canEdit || !history.length}
             title="Undo"
@@ -670,8 +665,20 @@ export default function OnlineClassroom({ lesson, profile, onLeave }) {
 
   const toggleMic = async () => {
     try {
-      await room.startAudio();
-      await room.localParticipant.setMicrophoneEnabled(!room.localParticipant.isMicrophoneEnabled);
+      const shouldEnable = !room.localParticipant.isMicrophoneEnabled;
+      if (shouldEnable) await requestMicrophonePermission();
+      await room.localParticipant.setMicrophoneEnabled(shouldEnable, {
+        autoGainControl: true,
+        echoCancellation: true,
+        noiseSuppression: true,
+      });
+      if (shouldEnable) {
+        try {
+          await room.startAudio();
+        } catch {
+          setAudioBlocked(true);
+        }
+      }
       setMic(room.localParticipant.isMicrophoneEnabled);
       setAudioBlocked(!room.canPlaybackAudio);
       setNotice("");
@@ -679,7 +686,7 @@ export default function OnlineClassroom({ lesson, profile, onLeave }) {
       setMic(room.localParticipant.isMicrophoneEnabled);
       setNotice(
         isPermissionError(error)
-          ? "Microphone permission is blocked by this browser."
+          ? "Microphone permission is blocked. Open your browser site settings for Dayo and allow microphone access."
           : error.message,
       );
     }
@@ -801,9 +808,9 @@ export default function OnlineClassroom({ lesson, profile, onLeave }) {
   return (
     <div
       ref={shellRef}
-      className="flex h-[calc(100vh-80px)] flex-col gap-3 bg-[#e9e8e3] p-3 md:p-5"
+      className="flex h-[calc(100dvh-64px)] flex-col gap-2 overflow-hidden bg-[#e9e8e3] p-2 md:h-[calc(100vh-80px)] md:gap-3 md:p-5"
     >
-      <div className="flex flex-wrap items-center gap-3 rounded-2xl border border-[#e4e1da] bg-white px-3 py-2 shadow-sm">
+      <div className="flex shrink-0 items-center gap-2 rounded-2xl border border-[#e4e1da] bg-white px-2 py-2 shadow-sm md:gap-3 md:px-3">
         <button
           onClick={leaveClassroom}
           title="Leave classroom"
@@ -811,7 +818,7 @@ export default function OnlineClassroom({ lesson, profile, onLeave }) {
         >
           <Icon>arrow_back</Icon>
         </button>
-        <div className="min-w-0">
+        <div className="min-w-0 flex-1">
           <h2 className="truncate text-sm font-bold text-[#30312d]">
             {lesson.subject?.name || "Online lesson"}
           </h2>
@@ -822,7 +829,7 @@ export default function OnlineClassroom({ lesson, profile, onLeave }) {
             })}
           </p>
         </div>
-        <span className="ml-auto rounded-full bg-[#e2ebe5] px-3 py-1 text-[11px] font-bold text-[#52735d]">
+        <span className="rounded-full bg-[#e2ebe5] px-2 py-1 text-[10px] font-bold text-[#52735d] md:px-3 md:text-[11px]">
           {presence.length || allParticipants.length} online
         </span>
         <button
@@ -835,12 +842,12 @@ export default function OnlineClassroom({ lesson, profile, onLeave }) {
       </div>
 
       {notice && (
-        <div className="rounded-xl border border-[#ead8bc] bg-[#fff7e8] px-4 py-2 text-xs font-semibold text-[#8a6333]">
+        <div className="shrink-0 rounded-xl border border-[#ead8bc] bg-[#fff7e8] px-3 py-2 text-xs font-semibold text-[#8a6333]">
           {notice}
         </div>
       )}
       {audioBlocked && (
-        <div className="flex flex-wrap items-center gap-3 rounded-xl border border-[#d5deec] bg-[#eef4ff] px-4 py-2 text-xs font-semibold text-[#435a74]">
+        <div className="flex shrink-0 flex-wrap items-center gap-3 rounded-xl border border-[#d5deec] bg-[#eef4ff] px-3 py-2 text-xs font-semibold text-[#435a74]">
           <span>Audio playback is blocked by this browser.</span>
           <button
             onClick={startSound}
@@ -871,7 +878,7 @@ export default function OnlineClassroom({ lesson, profile, onLeave }) {
           )}
         </main>
 
-        <aside className="flex min-h-0 flex-col gap-3">
+        <aside className="hidden min-h-0 flex-col gap-3 lg:flex">
           <div className="grid grid-cols-4 gap-1 rounded-2xl border border-[#e5e2dc] bg-white p-1">
             {tabs.map((item) => (
               <button
@@ -892,10 +899,8 @@ export default function OnlineClassroom({ lesson, profile, onLeave }) {
             <p className="mb-2 text-xs font-bold text-[#30312d]">Participants</p>
             {allParticipants.map((item) => (
               <div key={item.identity} className="flex items-center gap-2 border-t border-[#eee] py-2 text-xs">
-                <span className={`grid h-7 w-7 place-items-center rounded-full ${
-                  speakerLevels[item.identity] ? "animate-pulse bg-[#d8efd8] text-[#52735d]" : "bg-[#e2ebe5] text-[#52735d]"
-                }`}>
-                  <Icon size={16}>{speakerLevels[item.identity] ? "graphic_eq" : "person"}</Icon>
+                <span className="grid h-7 w-7 place-items-center rounded-full bg-[#e2ebe5] text-[#52735d]">
+                  <Icon size={16}>person</Icon>
                 </span>
                 <span className="truncate">{item.name || item.identity}</span>
               </div>
@@ -926,45 +931,62 @@ export default function OnlineClassroom({ lesson, profile, onLeave }) {
         </aside>
       </div>
 
-      <div className="flex flex-wrap items-center justify-center gap-2 rounded-2xl border border-[#e4e1da] bg-white p-2 shadow-sm">
+      <div className="shrink-0 rounded-2xl border border-[#e4e1da] bg-white p-2 shadow-sm">
+        <div className="mb-2 grid grid-cols-4 gap-1 lg:hidden">
+          {tabs.map((item) => (
+            <button
+              key={item.id}
+              onClick={() => setTab(item.id)}
+              title={item.label}
+              className={`flex h-11 flex-col items-center justify-center gap-0.5 rounded-xl text-[9px] font-bold transition ${
+                tab === item.id ? "bg-[#30312d] text-white" : "bg-[#f1efe9] text-[#66675f]"
+              }`}
+            >
+              <Icon size={17}>{item.icon}</Icon>
+              {item.label}
+            </button>
+          ))}
+        </div>
+        <div className="flex items-center justify-center gap-2">
         <button
           onClick={toggleMic}
           title={mic ? "Mute microphone" : "Turn microphone on"}
-          className={`flex h-11 items-center gap-2 rounded-xl px-4 text-xs font-bold ${
+          className={`flex h-12 w-12 items-center justify-center gap-2 rounded-full text-xs font-bold sm:w-auto sm:rounded-xl sm:px-4 ${
             mic ? "bg-[#e2ebe5] text-[#52735d]" : "bg-[#f3e3de] text-[#a35645]"
           }`}
         >
           <Icon size={19}>{mic ? "mic" : "mic_off"}</Icon>
-          {mic ? "Mute" : "Unmute"}
+          <span className="hidden sm:inline">{mic ? "Mute" : "Unmute"}</span>
         </button>
         <button
           onClick={toggleCamera}
           title={camera ? "Turn camera off" : "Turn camera on"}
-          className={`flex h-11 items-center gap-2 rounded-xl px-4 text-xs font-bold ${
+          className={`flex h-12 w-12 items-center justify-center gap-2 rounded-full text-xs font-bold sm:w-auto sm:rounded-xl sm:px-4 ${
             camera ? "bg-[#e2ebe5] text-[#52735d]" : "bg-[#f3e3de] text-[#a35645]"
           }`}
         >
           <Icon size={19}>{camera ? "videocam" : "videocam_off"}</Icon>
-          {camera ? "Camera off" : "Camera on"}
+          <span className="hidden sm:inline">{camera ? "Camera off" : "Camera on"}</span>
         </button>
         <button
           onClick={toggleScreen}
           title={screen ? "Stop sharing screen" : "Share screen"}
-          className={`flex h-11 items-center gap-2 rounded-xl px-4 text-xs font-bold ${
+          className={`hidden h-12 items-center justify-center gap-2 rounded-full text-xs font-bold sm:flex sm:w-auto sm:rounded-xl sm:px-4 ${
             screen ? "bg-[#e4e8ef] text-[#435a74]" : "bg-[#f1efe9] text-[#30312d]"
           }`}
         >
           <Icon size={19}>{screen ? "stop_screen_share" : "screen_share"}</Icon>
-          {screen ? "Stop share" : "Share"}
+          <span>{screen ? "Stop share" : "Share"}</span>
         </button>
         <button
           onClick={leaveClassroom}
           title="Leave classroom"
-          className="ml-0 flex h-11 items-center gap-2 rounded-xl bg-[#a35645] px-4 text-xs font-bold text-white md:ml-auto"
+          className="ml-2 flex h-12 w-14 items-center justify-center gap-2 rounded-full bg-[#a35645] text-xs font-bold text-white sm:w-auto sm:rounded-xl sm:px-4 md:ml-auto"
         >
           <Icon size={19}>call_end</Icon>
-          Leave
+          <span className="hidden sm:inline">Leave</span>
         </button>
+        </div>
       </div>
     </div>
   );
