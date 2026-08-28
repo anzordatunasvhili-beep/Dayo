@@ -195,6 +195,7 @@ function Stat({ icon, label, value, note, tint }) {
   );
 }
 function Dashboard({ setPage, data }) {
+  const now = new Date();
   const paid = data.payments
     .filter((p) => p.status === "paid")
     .reduce((n, p) => n + Number(p.amount), 0);
@@ -202,9 +203,14 @@ function Dashboard({ setPage, data }) {
     (n, l) => n + (new Date(l.ends_at) - new Date(l.starts_at)) / 36e5,
     0,
   );
+  const current = data.lessons.find(
+    (lesson) =>
+      new Date(lesson.starts_at) <= now && new Date(lesson.ends_at) >= now,
+  );
   const upcoming = data.lessons
-    .filter((l) => new Date(l.starts_at) >= new Date())
-    .slice(0, 3);
+    .filter((lesson) => lesson.id !== current?.id && new Date(lesson.ends_at) >= now)
+    .slice(0, current ? 2 : 3);
+  const visibleLessons = current ? [current, ...upcoming] : upcoming;
   return (
     <div className="p-5 md:p-8 max-w-[1400px] mx-auto animate-in">
       <div className="grid sm:grid-cols-2 xl:grid-cols-4 gap-4">
@@ -253,8 +259,8 @@ function Dashboard({ setPage, data }) {
               View calendar
             </button>
           </div>
-          {upcoming.length ? (
-            upcoming.map((s, i) => (
+          {visibleLessons.length ? (
+            visibleLessons.map((s, i) => (
               <div
                 key={s.id}
                 className="flex items-center gap-4 py-4 border-t border-[#efede8]"
@@ -263,6 +269,9 @@ function Dashboard({ setPage, data }) {
                   className={`w-2 h-10 rounded-full ${["bg-[#9bb5a2]", "bg-[#a7b8c6]", "bg-[#cdb98c]"][i]}`}
                 />
                 <div className="w-20 text-xs font-semibold">
+                  {s.id === current?.id && (
+                    <span className="block text-[9px] text-[#a35645] mb-1">LIVE NOW</span>
+                  )}
                   {new Date(s.starts_at).toLocaleString([], {
                     month: "short",
                     day: "numeric",
@@ -282,9 +291,11 @@ function Dashboard({ setPage, data }) {
                 </div>
                 <button
                   onClick={() => setPage(`classroom:${s.id}`)}
-                  className="text-[10px] px-2 py-1 rounded-lg bg-[#f1efe9]"
+                  title={s.id === current?.id ? "Join current class" : "Join lesson"}
+                  aria-label={s.id === current?.id ? "Join current class" : "Join lesson"}
+                  className="w-9 h-9 grid place-items-center rounded-lg bg-[#f1efe9]"
                 >
-                  Join
+                  <Icon size={17}>videocam</Icon>
                 </button>
               </div>
             ))
@@ -1787,9 +1798,11 @@ function StudentDashboard({ data, setPage }) {
               </div>
               <button
                 onClick={() => setPage(`classroom:${lesson.id}`)}
-                className="text-[10px] px-2 py-1 rounded-lg bg-[#f1efe9]"
+                title="Join lesson"
+                aria-label="Join lesson"
+                className="w-9 h-9 grid place-items-center rounded-lg bg-[#f1efe9]"
               >
-                Join
+                <Icon size={17}>videocam</Icon>
               </button>
             </div>
           ))
