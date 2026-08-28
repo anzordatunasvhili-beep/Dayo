@@ -1,5 +1,8 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
-import { AccessToken } from "https://esm.sh/livekit-server-sdk@2.15.0";
+import {
+  AccessToken,
+  RoomServiceClient,
+} from "https://esm.sh/livekit-server-sdk@2.15.0";
 
 const cors = {
   "Access-Control-Allow-Origin": "*",
@@ -15,6 +18,12 @@ const normalizeLiveKitUrl = (value: string) => {
   if (url.protocol !== "wss:" && url.protocol !== "ws:") {
     throw new Error("LIVEKIT_URL must use wss:// for production or ws:// for local testing.");
   }
+  return url.toString().replace(/\/$/, "");
+};
+
+const liveKitHttpUrl = (value: string) => {
+  const url = new URL(value);
+  url.protocol = url.protocol === "wss:" ? "https:" : "http:";
   return url.toString().replace(/\/$/, "");
 };
 
@@ -51,12 +60,37 @@ Deno.serve(async (req) => {
       .select("first_name,last_name,role")
       .eq("id", authData.user.id)
       .single();
+    const roomName = `lesson_${lessonId}`;
+    const role = profile?.role || "student";
+    if (role !== "teacher") {
+      const roomService = new RoomServiceClient(
+        liveKitHttpUrl(normalizedLiveKitUrl),
+        apiKey,
+        apiSecret,
+      );
+      let participants = [];
+      try {
+        participants = await roomService.listParticipants(roomName);
+      } catch {
+        participants = [];
+      }
+      const teacherIsPresent = participants.some((participant) => {
+        try {
+          return JSON.parse(participant.metadata || "{}").role === "teacher";
+        } catch {
+          return false;
+        }
+      });
+      if (!teacherIsPresent) {
+        throw new Error("The teacher has not started this classroom yet.");
+      }
+    }
     const token = new AccessToken(apiKey, apiSecret, {
       identity: authData.user.id,
       name: profile ? `${profile.first_name} ${profile.last_name}` : authData.user.email,
-      metadata: JSON.stringify({ role: profile?.role || "student", lesson_id: lessonId }),
+      metadata: JSON.stringify({ role, lesson_id: lessonId }),
     });
-    token.addGrant({ roomJoin: true, room: `lesson_${lessonId}` });
+    token.addGrant({ roomJoin: true, room: roomName });
     return new Response(JSON.stringify({ token: await token.toJwt(), url: normalizedLiveKitUrl }), {
       headers: { ...cors, "Content-Type": "application/json" },
     });

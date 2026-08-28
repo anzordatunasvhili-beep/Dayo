@@ -23,6 +23,7 @@ const tabs = [
   { id: "screen", icon: "present_to_all", label: "Screen" },
   { id: "split", icon: "view_sidebar", label: "Split" },
 ];
+const emptyBoard = { operations: [], view: { x: 0, y: 0, scale: 1 } };
 
 function Icon({ children, size = 20 }) {
   return (
@@ -36,7 +37,15 @@ function isPermissionError(error) {
   return ["NotAllowedError", "PermissionDeniedError"].includes(error?.name);
 }
 
-function ParticipantTile({ participant, source }) {
+function participantRole(participant) {
+  try {
+    return JSON.parse(participant.metadata || "{}").role;
+  } catch {
+    return undefined;
+  }
+}
+
+function ParticipantTile({ participant, source, compact = false, selected = false, onSelect }) {
   const videoRef = useRef(null);
   const [publication, setPublication] = useState(null);
 
@@ -67,43 +76,51 @@ function ParticipantTile({ participant, source }) {
   }, [publication]);
 
   return (
-    <div className="relative aspect-video overflow-hidden rounded-2xl bg-[#20211d] shadow-sm">
+    <button
+      type="button"
+      onClick={onSelect}
+      className={`relative block aspect-video w-full overflow-hidden rounded-2xl bg-[#20211d] text-left shadow-sm ${
+        selected ? "ring-2 ring-[#8f9d92]" : ""
+      }`}
+    >
       {publication?.track ? (
         <video ref={videoRef} autoPlay playsInline className="h-full w-full object-cover" />
       ) : (
         <div className="grid h-full place-items-center text-white/70">
-          <div className="grid h-16 w-16 place-items-center rounded-full bg-white/10">
-            <Icon size={34}>person</Icon>
+          <div className={`${compact ? "h-11 w-11" : "h-16 w-16"} grid place-items-center rounded-full bg-white/10`}>
+            <Icon size={compact ? 25 : 34}>person</Icon>
           </div>
         </div>
       )}
       <span className="absolute bottom-3 left-3 max-w-[80%] truncate rounded-full bg-black/65 px-3 py-1 text-[11px] font-semibold text-white">
         {participant.name || participant.identity}
       </span>
-    </div>
+    </button>
   );
 }
 
-function Whiteboard({ lessonId, initialData, canEdit }) {
+function Whiteboard({ lessonId, board, onBoardChange, canEdit }) {
   const canvasRef = useRef(null);
   const drawingRef = useRef(null);
   const boardChannelRef = useRef(null);
-  const [operations, setOperations] = useState(
-    Array.isArray(initialData) ? initialData : [],
-  );
+  const panRef = useRef(null);
   const [tool, setTool] = useState("pen");
   const [color, setColor] = useState("#30312d");
   const [width, setWidth] = useState(3);
   const [history, setHistory] = useState([]);
   const [redo, setRedo] = useState([]);
+  const operations = Array.isArray(board?.operations) ? board.operations : [];
+  const view = board?.view || emptyBoard.view;
 
-  const redraw = (items) => {
+  const redraw = (items = operations, nextView = view) => {
     const canvas = canvasRef.current;
     if (!canvas) return;
     const context = canvas.getContext("2d");
     context.clearRect(0, 0, canvas.width, canvas.height);
     context.save();
     context.scale(window.devicePixelRatio, window.devicePixelRatio);
+    context.translate(nextView.x, nextView.y);
+    context.scale(nextView.scale, nextView.scale);
     items.forEach((item) => {
       context.strokeStyle = item.color;
       context.fillStyle = item.color;
@@ -144,18 +161,23 @@ function Whiteboard({ lessonId, initialData, canEdit }) {
     const resize = () => {
       canvas.width = canvas.clientWidth * window.devicePixelRatio;
       canvas.height = canvas.clientHeight * window.devicePixelRatio;
-      redraw(operations);
+      redraw();
     };
     resize();
     window.addEventListener("resize", resize);
     return () => window.removeEventListener("resize", resize);
-  }, [operations]);
+  }, [operations, view]);
 
   useEffect(() => {
     if (!supabase) return undefined;
     let active = true;
     const handler = ({ payload }) => {
-      if (active && payload?.type === "replace") setOperations(payload.operations);
+      if (active && payload?.type === "replace") {
+        onBoardChange({
+          operations: payload.operations || [],
+          view: payload.view || emptyBoard.view,
+        });
+      }
     };
     const boardChannel = supabase.channel(`${channelName(lessonId)}:board`);
     boardChannel.on("broadcast", { event: "board" }, handler).subscribe();
@@ -167,33 +189,75 @@ function Whiteboard({ lessonId, initialData, canEdit }) {
     };
   }, [lessonId]);
 
-  const broadcast = (next) => {
+  const broadcast = (nextOperations, nextView = view) => {
     boardChannelRef.current?.send({
       type: "broadcast",
       event: "board",
-      payload: { type: "replace", operations: next },
+      payload: { type: "replace", operations: nextOperations, view: nextView },
     });
   };
 
-  const publish = (next) => {
-    setHistory((current) => [...current, operations]);
+  const publish = (nextOperations, nextView = view, save = true) => {
+    setHistory((current) => [...current, { operations, view }]);
     setRedo([]);
-    setOperations(next);
-    broadcast(next);
-    saveWhiteboard(lessonId, next).catch(() => {});
+    onBoardChange({ operations: nextOperations, view: nextView });
+    broadcast(nextOperations, nextView);
+    if (save) saveWhiteboard(lessonId, nextOperations).catch(() => {});
   };
 
   const point = (event) => {
     const rect = canvasRef.current.getBoundingClientRect();
-    return [event.clientX - rect.left, event.clientY - rect.top];
+    return [
+      (event.clientX - rect.left - view.x) / view.scale,
+      (event.clientY - rect.top - view.y) / view.scale,
+    ];
   };
 
   const restore = (next, nextHistory, nextRedo) => {
     setHistory(nextHistory);
     setRedo(nextRedo);
-    setOperations(next);
-    broadcast(next);
-    saveWhiteboard(lessonId, next).catch(() => {});
+    onBoardChange(next);
+    broadcast(next.operations, next.view);
+    saveWhiteboard(lessonId, next.operations).catch(() => {});
+  };
+
+  const setView = (nextView) => {
+    onBoardChange({ operations, view: nextView });
+    broadcast(operations, nextView);
+  };
+
+  const zoom = (delta) => {
+    const nextScale = Math.min(2.5, Math.max(0.5, Number((view.scale + delta).toFixed(2))));
+    setView({ ...view, scale: nextScale });
+  };
+
+  const resetView = () => setView(emptyBoard.view);
+
+  const startPan = (event) => {
+    panRef.current = {
+      pointerId: event.pointerId,
+      x: event.clientX,
+      y: event.clientY,
+      view,
+    };
+    canvasRef.current.setPointerCapture(event.pointerId);
+  };
+
+  const movePan = (event) => {
+    if (!panRef.current) return;
+    const nextView = {
+      ...panRef.current.view,
+      x: panRef.current.view.x + event.clientX - panRef.current.x,
+      y: panRef.current.view.y + event.clientY - panRef.current.y,
+    };
+    onBoardChange({ operations, view: nextView });
+    redraw(operations, nextView);
+  };
+
+  const endPan = () => {
+    if (!panRef.current) return;
+    panRef.current = null;
+    broadcast(operations, view);
   };
 
   return (
@@ -246,7 +310,7 @@ function Whiteboard({ lessonId, initialData, canEdit }) {
             title="Undo"
             onClick={() => {
               const previous = history.at(-1);
-              restore(previous, history.slice(0, -1), [...redo, operations]);
+              restore(previous, history.slice(0, -1), [...redo, { operations, view }]);
             }}
             className="grid h-9 w-9 place-items-center rounded-xl border border-[#e5e2dc] bg-white disabled:opacity-45"
           >
@@ -257,7 +321,7 @@ function Whiteboard({ lessonId, initialData, canEdit }) {
             title="Redo"
             onClick={() => {
               const next = redo.at(-1);
-              restore(next, [...history, operations], redo.slice(0, -1));
+              restore(next, [...history, { operations, view }], redo.slice(0, -1));
             }}
             className="grid h-9 w-9 place-items-center rounded-xl border border-[#e5e2dc] bg-white disabled:opacity-45"
           >
@@ -271,12 +335,38 @@ function Whiteboard({ lessonId, initialData, canEdit }) {
           >
             <Icon size={19}>delete</Icon>
           </button>
+          <button
+            title="Zoom out"
+            onClick={() => zoom(-0.1)}
+            className="grid h-9 w-9 place-items-center rounded-xl border border-[#e5e2dc] bg-white"
+          >
+            <Icon size={19}>zoom_out</Icon>
+          </button>
+          <button
+            title="Reset view"
+            onClick={resetView}
+            className="grid h-9 w-9 place-items-center rounded-xl border border-[#e5e2dc] bg-white"
+          >
+            <Icon size={19}>center_focus_strong</Icon>
+          </button>
+          <button
+            title="Zoom in"
+            onClick={() => zoom(0.1)}
+            className="grid h-9 w-9 place-items-center rounded-xl border border-[#e5e2dc] bg-white"
+          >
+            <Icon size={19}>zoom_in</Icon>
+          </button>
         </div>
       </div>
       <canvas
         ref={canvasRef}
         className="min-h-[340px] flex-1 touch-none bg-white"
         onPointerDown={(event) => {
+          if (event.button === 1) {
+            event.preventDefault();
+            startPan(event);
+            return;
+          }
           if (!canEdit) return;
           const [x, y] = point(event);
           if (tool === "text") {
@@ -288,6 +378,10 @@ function Whiteboard({ lessonId, initialData, canEdit }) {
           canvasRef.current.setPointerCapture(event.pointerId);
         }}
         onPointerMove={(event) => {
+          if (panRef.current) {
+            movePan(event);
+            return;
+          }
           if (!drawingRef.current) return;
           const [x, y] = point(event);
           drawingRef.current.points.push([x, y]);
@@ -302,6 +396,10 @@ function Whiteboard({ lessonId, initialData, canEdit }) {
           ]);
         }}
         onPointerUp={(event) => {
+          if (panRef.current) {
+            endPan(event);
+            return;
+          }
           if (!drawingRef.current) return;
           const draft = drawingRef.current;
           drawingRef.current = null;
@@ -319,6 +417,7 @@ function Whiteboard({ lessonId, initialData, canEdit }) {
             },
           ]);
         }}
+        onAuxClick={(event) => event.preventDefault()}
       />
     </div>
   );
@@ -326,6 +425,8 @@ function Whiteboard({ lessonId, initialData, canEdit }) {
 
 export default function OnlineClassroom({ lesson, profile, onLeave }) {
   const shellRef = useRef(null);
+  const onLeaveRef = useRef(onLeave);
+  const classroomChannelRef = useRef(null);
   const [room] = useState(() => new Room({ adaptiveStream: true, dynacast: true }));
   const [participants, setParticipants] = useState([]);
   const [local, setLocal] = useState(null);
@@ -333,13 +434,19 @@ export default function OnlineClassroom({ lesson, profile, onLeave }) {
   const [tab, setTab] = useState("whiteboard");
   const [chat, setChat] = useState([]);
   const [message, setMessage] = useState("");
-  const [board, setBoard] = useState([]);
+  const [board, setBoard] = useState(emptyBoard);
   const [mic, setMic] = useState(false);
   const [camera, setCamera] = useState(false);
   const [screen, setScreen] = useState(false);
   const [presence, setPresence] = useState([]);
   const [notice, setNotice] = useState("");
   const [fullscreen, setFullscreen] = useState(false);
+  const [focusedId, setFocusedId] = useState(null);
+  const endedRef = useRef(false);
+
+  useEffect(() => {
+    onLeaveRef.current = onLeave;
+  }, [onLeave]);
 
   useEffect(() => {
     const updateFullscreen = () => setFullscreen(document.fullscreenElement === shellRef.current);
@@ -351,6 +458,14 @@ export default function OnlineClassroom({ lesson, profile, onLeave }) {
     let active = true;
     let realtime;
     const syncParticipants = () => setParticipants([...room.remoteParticipants.values()]);
+    const handleParticipantDisconnected = (participant) => {
+      syncParticipants();
+      if (profile.role !== "teacher" && participantRole(participant) === "teacher") {
+        setNotice("The teacher ended this classroom.");
+        room.disconnect();
+        onLeaveRef.current();
+      }
+    };
 
     const connect = async () => {
       try {
@@ -360,13 +475,23 @@ export default function OnlineClassroom({ lesson, profile, onLeave }) {
         ]);
         if (!active) return;
         setChat(classroom.chat);
-        setBoard(classroom.whiteboard?.data || []);
+        setBoard({
+          operations: classroom.whiteboard?.data || [],
+          view: emptyBoard.view,
+        });
         realtime = supabase.channel(channelName(lesson.id), {
           config: { presence: { key: profile.id } },
         });
+        classroomChannelRef.current = realtime;
         realtime
           .on("presence", { event: "sync" }, () => {
             setPresence(Object.values(realtime.presenceState()).flat());
+          })
+          .on("broadcast", { event: "classroom:end" }, () => {
+            endedRef.current = true;
+            setNotice("The teacher ended this classroom.");
+            room.disconnect();
+            onLeaveRef.current();
           })
           .subscribe(async () => {
             await realtime.track({
@@ -377,34 +502,12 @@ export default function OnlineClassroom({ lesson, profile, onLeave }) {
           });
         room.on(RoomEvent.ConnectionStateChanged, (state) => setStatus(state.toLowerCase()));
         room.on(RoomEvent.ParticipantConnected, syncParticipants);
-        room.on(RoomEvent.ParticipantDisconnected, syncParticipants);
+        room.on(RoomEvent.ParticipantDisconnected, handleParticipantDisconnected);
         await room.connect(url, token);
         if (!active) return;
         setLocal(room.localParticipant);
         syncParticipants();
         setStatus("connected");
-        try {
-          await room.localParticipant.setMicrophoneEnabled(true);
-          setMic(true);
-        } catch (error) {
-          setMic(false);
-          setNotice(
-            isPermissionError(error)
-              ? "Microphone permission is blocked. You can still stay in class and enable it from the browser when ready."
-              : error.message,
-          );
-        }
-        try {
-          await room.localParticipant.setCameraEnabled(true);
-          setCamera(true);
-        } catch (error) {
-          setCamera(false);
-          setNotice(
-            isPermissionError(error)
-              ? "Camera permission is blocked. You are still connected to the classroom."
-              : error.message,
-          );
-        }
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         setStatus(
@@ -419,11 +522,20 @@ export default function OnlineClassroom({ lesson, profile, onLeave }) {
     return () => {
       active = false;
       room.off(RoomEvent.ParticipantConnected, syncParticipants);
-      room.off(RoomEvent.ParticipantDisconnected, syncParticipants);
+      room.off(RoomEvent.ParticipantDisconnected, handleParticipantDisconnected);
       room.disconnect();
       if (realtime) {
+        if (profile.role === "teacher" && !endedRef.current) {
+          realtime.send({
+            type: "broadcast",
+            event: "classroom:end",
+            payload: { lesson_id: lesson.id },
+          });
+          saveWhiteboard(lesson.id, []).catch(() => {});
+        }
         realtime.untrack();
         supabase.removeChannel(realtime);
+        classroomChannelRef.current = null;
       }
     };
   }, [lesson.id, profile.id, profile.first_name, profile.last_name, profile.role, room]);
@@ -445,6 +557,25 @@ export default function OnlineClassroom({ lesson, profile, onLeave }) {
       .subscribe();
     return () => supabase.removeChannel(subscription);
   }, [lesson.id]);
+
+  const leaveClassroom = async () => {
+    if (profile.role === "teacher") {
+      endedRef.current = true;
+      setBoard(emptyBoard);
+      try {
+        await saveWhiteboard(lesson.id, []);
+        await classroomChannelRef.current?.send({
+          type: "broadcast",
+          event: "classroom:end",
+          payload: { lesson_id: lesson.id },
+        });
+      } catch (error) {
+        setNotice(error.message || "Could not notify everyone, leaving anyway.");
+      }
+    }
+    room.disconnect();
+    onLeaveRef.current();
+  };
 
   const toggleMic = async () => {
     try {
@@ -505,17 +636,57 @@ export default function OnlineClassroom({ lesson, profile, onLeave }) {
   }
 
   const allParticipants = [local, ...participants].filter(Boolean);
-  const videoTiles = (source) => (
-    <div className="grid h-full content-start gap-3 overflow-auto rounded-2xl bg-[#20211d] p-3 sm:grid-cols-2">
-      {allParticipants.map((item) => (
-        <ParticipantTile
-          key={`${item.identity}-${source || "camera"}`}
-          participant={item}
-          source={source}
-        />
-      ))}
-    </div>
-  );
+  const hasTrack = (participant, source) =>
+    [...participant.videoTrackPublications.values()].some(
+      (item) => item.source === source && item.track,
+    );
+  const classroomParticipants =
+    tab === "screen"
+      ? allParticipants.filter((item) => hasTrack(item, Track.Source.ScreenShare))
+      : allParticipants;
+  const videoStage = (source) => {
+    const visible = source === Track.Source.ScreenShare
+      ? allParticipants.filter((item) => hasTrack(item, source))
+      : classroomParticipants;
+    const focused =
+      visible.find((item) => item.identity === focusedId) ||
+      visible.find((item) => hasTrack(item, source || Track.Source.Camera)) ||
+      visible[0];
+    const strip = visible.filter((item) => item.identity !== focused?.identity);
+    if (!visible.length) {
+      return (
+        <div className="grid h-full place-items-center rounded-2xl bg-[#20211d] p-6 text-center text-sm font-semibold text-white/65">
+          No screen is being shared.
+        </div>
+      );
+    }
+    return (
+      <div className="flex h-full min-h-0 flex-col gap-3 rounded-2xl bg-[#20211d] p-3">
+        <div className="mx-auto w-full max-w-5xl flex-1 content-center">
+          <ParticipantTile
+            participant={focused}
+            source={source}
+            selected
+            onSelect={() => setFocusedId(focused.identity)}
+          />
+        </div>
+        {strip.length > 0 && (
+          <div className="flex max-h-36 gap-3 overflow-x-auto pb-1">
+            {strip.map((item) => (
+              <div key={`${item.identity}-${source || "camera"}-strip`} className="w-48 shrink-0">
+                <ParticipantTile
+                  participant={item}
+                  source={source}
+                  compact
+                  onSelect={() => setFocusedId(item.identity)}
+                />
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    );
+  };
 
   return (
     <div
@@ -524,7 +695,7 @@ export default function OnlineClassroom({ lesson, profile, onLeave }) {
     >
       <div className="flex flex-wrap items-center gap-3 rounded-2xl border border-[#e4e1da] bg-white px-3 py-2 shadow-sm">
         <button
-          onClick={onLeave}
+          onClick={leaveClassroom}
           title="Leave classroom"
           className="grid h-10 w-10 place-items-center rounded-xl bg-[#f1efe9] text-[#30312d]"
         >
@@ -562,14 +733,14 @@ export default function OnlineClassroom({ lesson, profile, onLeave }) {
       <div className="grid min-h-0 flex-1 gap-3 lg:grid-cols-[1fr_320px]">
         <main className="min-h-0">
           {tab === "whiteboard" ? (
-            <Whiteboard lessonId={lesson.id} initialData={board} canEdit />
+            <Whiteboard lessonId={lesson.id} board={board} onBoardChange={setBoard} canEdit />
           ) : tab === "split" ? (
             <div className="grid h-full gap-3 lg:grid-cols-2">
-              <Whiteboard lessonId={lesson.id} initialData={board} canEdit />
-              {videoTiles()}
+              <Whiteboard lessonId={lesson.id} board={board} onBoardChange={setBoard} canEdit />
+              {videoStage()}
             </div>
           ) : (
-            videoTiles(tab === "screen" ? Track.Source.ScreenShare : undefined)
+            videoStage(tab === "screen" ? Track.Source.ScreenShare : undefined)
           )}
         </main>
 
@@ -658,7 +829,7 @@ export default function OnlineClassroom({ lesson, profile, onLeave }) {
           {screen ? "Stop share" : "Share"}
         </button>
         <button
-          onClick={onLeave}
+          onClick={leaveClassroom}
           title="Leave classroom"
           className="ml-0 flex h-11 items-center gap-2 rounded-xl bg-[#a35645] px-4 text-xs font-bold text-white md:ml-auto"
         >
