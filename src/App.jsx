@@ -25,6 +25,7 @@ import {
 } from "./lib/api";
 import Auth from "./Auth";
 import EditableSchedule from "./components/EditableSchedule";
+import OnlineClassroom from "./components/OnlineClassroom";
 
 const Icon = ({ children, size = 20 }) => (
   <span className="material-symbols-rounded" style={{ fontSize: size }}>
@@ -279,6 +280,12 @@ function Dashboard({ setPage, data }) {
                       : s.group?.name || "Open slot"}
                   </div>
                 </div>
+                <button
+                  onClick={() => setPage(`classroom:${s.id}`)}
+                  className="text-[10px] px-2 py-1 rounded-lg bg-[#f1efe9]"
+                >
+                  Join
+                </button>
               </div>
             ))
           ) : (
@@ -1778,6 +1785,12 @@ function StudentDashboard({ data, setPage }) {
                   })}
                 </p>
               </div>
+              <button
+                onClick={() => setPage(`classroom:${lesson.id}`)}
+                className="text-[10px] px-2 py-1 rounded-lg bg-[#f1efe9]"
+              >
+                Join
+              </button>
             </div>
           ))
         ) : (
@@ -2000,7 +2013,10 @@ function Account({ profile, onPasswordChange, onProfileChange }) {
 export default function App() {
   const [session, setSession] = useState(undefined);
   const [data, setData] = useState(null);
-  const [page, setPage] = useState("dashboard");
+  const [page, setPage] = useState(() => {
+    const match = window.location.pathname.match(/^\/lessons\/([^/]+)\/classroom$/);
+    return match ? `classroom:${match[1]}` : "dashboard";
+  });
   const [menu, setMenu] = useState(false);
   const [notice, setNotice] = useState("");
   const [error, setError] = useState("");
@@ -2048,6 +2064,12 @@ export default function App() {
   };
   const updateProfile = (profileValues) =>
     act(() => updateOwnProfile(profileValues), "Account updated");
+  const navigate = (nextPage) => {
+    if (nextPage.startsWith("classroom:")) {
+      window.history.pushState({}, "", `/lessons/${nextPage.slice(10)}/classroom`);
+    }
+    setPage(nextPage);
+  };
   if (session === undefined) return <Loading />;
   if (!session) return <Auth />;
   if (!data) return <Loading error={error} />;
@@ -2072,7 +2094,7 @@ export default function App() {
       .reduce((n, p) => n + Number(p.amount), 0),
   }));
   const teacherContent = {
-    dashboard: <Dashboard setPage={setPage} data={data} />,
+    dashboard: <Dashboard setPage={navigate} data={data} />,
     schedule: (
       <EditableSchedule
         lessons={data.lessons}
@@ -2166,7 +2188,7 @@ export default function App() {
     ),
   };
   const studentContent = {
-    dashboard: <StudentDashboard data={data} setPage={setPage} />,
+    dashboard: <StudentDashboard data={data} setPage={navigate} />,
     schedule: (
       <EditableSchedule
         lessons={data.lessons}
@@ -2195,6 +2217,17 @@ export default function App() {
       />
     ),
   };
+  const classroomId = page.startsWith("classroom:") ? page.slice(10) : null;
+  const classroomLesson = classroomId
+    ? data.lessons.find((lesson) => lesson.id === classroomId)
+    : null;
+  const classroomContent = classroomLesson ? (
+    <OnlineClassroom
+      lesson={classroomLesson}
+      profile={data.profile}
+      onLeave={() => navigate("dashboard")}
+    />
+  ) : null;
   const content =
     (data.profile.role === "student" ? studentContent : teacherContent)[page] ||
     (data.profile.role === "student"
@@ -2204,7 +2237,7 @@ export default function App() {
     <div className="min-h-screen lg:h-screen flex bg-[#fbfaf7] lg:p-4 lg:gap-0">
       <Sidebar
         page={page}
-        setPage={setPage}
+        setPage={navigate}
         open={menu}
         setOpen={setMenu}
         profile={data.profile}
@@ -2223,7 +2256,7 @@ export default function App() {
             {error}
           </div>
         )}
-        {content}
+        {classroomContent || content}
       </main>
       {notice && (
         <div className="fixed bottom-6 right-6 z-[60] bg-[#30312d] text-white px-5 py-3 rounded-xl shadow-xl text-sm animate-in">

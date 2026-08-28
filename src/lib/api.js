@@ -209,6 +209,51 @@ export async function updateOwnProfile(input) {
   if (error) throw error;
 }
 
+export async function getLiveKitToken(lessonId) {
+  const db = requireClient();
+  const { data, error } = await db.functions.invoke("create-livekit-token", {
+    body: { lesson_id: lessonId },
+  });
+  if (error) throw error;
+  if (data?.error) throw new Error(data.error);
+  return data;
+}
+
+export async function getClassroomData(lessonId) {
+  const db = requireClient();
+  const [{ data: whiteboard, error: whiteboardError }, { data: chat, error: chatError }] =
+    await Promise.all([
+      db.from("lesson_whiteboards").select("data").eq("lesson_id", lessonId).maybeSingle(),
+      db.from("lesson_chat_messages").select("*").eq("lesson_id", lessonId).order("created_at"),
+    ]);
+  if (whiteboardError) throw whiteboardError;
+  if (chatError) throw chatError;
+  return { whiteboard, chat: chat || [] };
+}
+
+export async function saveWhiteboard(lessonId, data) {
+  const db = requireClient();
+  const { data: userData } = await db.auth.getUser();
+  const { error } = await db.from("lesson_whiteboards").upsert({
+    lesson_id: lessonId,
+    data,
+    updated_by: userData.user?.id,
+    updated_at: new Date().toISOString(),
+  });
+  if (error) throw error;
+}
+
+export async function sendChatMessage(lessonId, body) {
+  const db = requireClient();
+  const { data: userData } = await db.auth.getUser();
+  const { error } = await db.from("lesson_chat_messages").insert({
+    lesson_id: lessonId,
+    user_id: userData.user?.id,
+    body,
+  });
+  if (error) throw error;
+}
+
 export async function createLesson(input) {
   const db = requireClient();
   const {
