@@ -99,6 +99,45 @@ function ParticipantTile({ participant, source, compact = false, selected = fals
   );
 }
 
+function RemoteAudio({ participant }) {
+  const audioRef = useRef(null);
+  const [tracks, setTracks] = useState([]);
+
+  useEffect(() => {
+    const update = () => {
+      setTracks(
+        [...participant.audioTrackPublications.values()]
+          .map((publication) => publication.track)
+          .filter(Boolean),
+      );
+    };
+    update();
+    participant.on(ParticipantEvent.TrackSubscribed, update);
+    participant.on(ParticipantEvent.TrackUnsubscribed, update);
+    participant.on(ParticipantEvent.TrackMuted, update);
+    participant.on(ParticipantEvent.TrackUnmuted, update);
+    return () => {
+      participant.off(ParticipantEvent.TrackSubscribed, update);
+      participant.off(ParticipantEvent.TrackUnsubscribed, update);
+      participant.off(ParticipantEvent.TrackMuted, update);
+      participant.off(ParticipantEvent.TrackUnmuted, update);
+    };
+  }, [participant]);
+
+  useEffect(() => {
+    const elements = tracks.map((track) => {
+      const element = track.attach();
+      element.autoplay = true;
+      element.playsInline = true;
+      return element;
+    });
+    audioRef.current?.replaceChildren(...elements);
+    return () => tracks.forEach((track) => track.detach());
+  }, [tracks]);
+
+  return <div ref={audioRef} aria-hidden="true" className="fixed h-0 w-0 overflow-hidden" />;
+}
+
 function Whiteboard({ lessonId, board, onBoardChange, canEdit }) {
   const canvasRef = useRef(null);
   const drawingRef = useRef(null);
@@ -440,6 +479,7 @@ export default function OnlineClassroom({ lesson, profile, onLeave }) {
   const [screen, setScreen] = useState(false);
   const [presence, setPresence] = useState([]);
   const [notice, setNotice] = useState("");
+  const [audioBlocked, setAudioBlocked] = useState(false);
   const [fullscreen, setFullscreen] = useState(false);
   const [focusedId, setFocusedId] = useState(null);
   const endedRef = useRef(false);
@@ -458,6 +498,12 @@ export default function OnlineClassroom({ lesson, profile, onLeave }) {
     let active = true;
     let realtime;
     const syncParticipants = () => setParticipants([...room.remoteParticipants.values()]);
+    const syncLocalMedia = () => {
+      setMic(room.localParticipant.isMicrophoneEnabled);
+      setCamera(room.localParticipant.isCameraEnabled);
+      setScreen(room.localParticipant.isScreenShareEnabled);
+    };
+    const syncAudioPlayback = () => setAudioBlocked(!room.canPlaybackAudio);
     const handleParticipantDisconnected = (participant) => {
       syncParticipants();
       if (profile.role !== "teacher" && participantRole(participant) === "teacher") {
@@ -503,10 +549,15 @@ export default function OnlineClassroom({ lesson, profile, onLeave }) {
         room.on(RoomEvent.ConnectionStateChanged, (state) => setStatus(state.toLowerCase()));
         room.on(RoomEvent.ParticipantConnected, syncParticipants);
         room.on(RoomEvent.ParticipantDisconnected, handleParticipantDisconnected);
+        room.on(RoomEvent.LocalTrackPublished, syncLocalMedia);
+        room.on(RoomEvent.LocalTrackUnpublished, syncLocalMedia);
+        room.on(RoomEvent.AudioPlaybackStatusChanged, syncAudioPlayback);
         await room.connect(url, token);
         if (!active) return;
         setLocal(room.localParticipant);
         syncParticipants();
+        syncLocalMedia();
+        syncAudioPlayback();
         setStatus("connected");
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
@@ -523,6 +574,9 @@ export default function OnlineClassroom({ lesson, profile, onLeave }) {
       active = false;
       room.off(RoomEvent.ParticipantConnected, syncParticipants);
       room.off(RoomEvent.ParticipantDisconnected, handleParticipantDisconnected);
+      room.off(RoomEvent.LocalTrackPublished, syncLocalMedia);
+      room.off(RoomEvent.LocalTrackUnpublished, syncLocalMedia);
+      room.off(RoomEvent.AudioPlaybackStatusChanged, syncAudioPlayback);
       room.disconnect();
       if (realtime) {
         if (profile.role === "teacher" && !endedRef.current) {
@@ -579,10 +633,13 @@ export default function OnlineClassroom({ lesson, profile, onLeave }) {
 
   const toggleMic = async () => {
     try {
-      await room.localParticipant.setMicrophoneEnabled(!mic);
-      setMic(!mic);
+      await room.startAudio();
+      await room.localParticipant.setMicrophoneEnabled(!room.localParticipant.isMicrophoneEnabled);
+      setMic(room.localParticipant.isMicrophoneEnabled);
+      setAudioBlocked(!room.canPlaybackAudio);
       setNotice("");
     } catch (error) {
+      setMic(room.localParticipant.isMicrophoneEnabled);
       setNotice(
         isPermissionError(error)
           ? "Microphone permission is blocked by this browser."
@@ -593,10 +650,11 @@ export default function OnlineClassroom({ lesson, profile, onLeave }) {
 
   const toggleCamera = async () => {
     try {
-      await room.localParticipant.setCameraEnabled(!camera);
-      setCamera(!camera);
+      await room.localParticipant.setCameraEnabled(!room.localParticipant.isCameraEnabled);
+      setCamera(room.localParticipant.isCameraEnabled);
       setNotice("");
     } catch (error) {
+      setCamera(room.localParticipant.isCameraEnabled);
       setNotice(
         isPermissionError(error)
           ? "Camera permission is blocked by this browser."
@@ -607,10 +665,11 @@ export default function OnlineClassroom({ lesson, profile, onLeave }) {
 
   const toggleScreen = async () => {
     try {
-      await room.localParticipant.setScreenShareEnabled(!screen);
-      setScreen(!screen);
+      await room.localParticipant.setScreenShareEnabled(!room.localParticipant.isScreenShareEnabled);
+      setScreen(room.localParticipant.isScreenShareEnabled);
       setNotice("");
     } catch (error) {
+      setScreen(room.localParticipant.isScreenShareEnabled);
       setNotice(error.message || "Screen sharing is not available on this device.");
     }
   };
@@ -729,6 +788,16 @@ export default function OnlineClassroom({ lesson, profile, onLeave }) {
           {notice}
         </div>
       )}
+      {audioBlocked && (
+        <div className="rounded-xl border border-[#d5deec] bg-[#eef4ff] px-4 py-2 text-xs font-semibold text-[#435a74]">
+          Audio playback is blocked by this browser. Tap Unmute to enable classroom sound.
+        </div>
+      )}
+      <div aria-hidden="true" className="fixed h-0 w-0 overflow-hidden">
+        {participants.map((participant) => (
+          <RemoteAudio key={`${participant.identity}-audio`} participant={participant} />
+        ))}
+      </div>
 
       <div className="grid min-h-0 flex-1 gap-3 lg:grid-cols-[1fr_320px]">
         <main className="min-h-0">
