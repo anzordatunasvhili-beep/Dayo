@@ -711,6 +711,12 @@ function Whiteboard({ lessonId, board, onBoardChange, canEdit, profile }) {
     return () => window.clearInterval(timer);
   }, []);
 
+  useEffect(() => {
+    if (selectedObjectId && !objects.some((item) => item.id === selectedObjectId)) {
+      setSelectedObjectId(null);
+    }
+  }, [objects, selectedObjectId]);
+
   const sendViewport = (nextView) => {
     const key = JSON.stringify(nextView);
     if (lastViewRef.current === key) return;
@@ -848,7 +854,14 @@ function Whiteboard({ lessonId, board, onBoardChange, canEdit, profile }) {
   const clearBoard = () => {
     const next = createEmptyBoard();
     next.view = { ...view };
+    setSelectedObjectId(null);
     publish(next);
+  };
+
+  const deleteSelectedObject = () => {
+    if (!canEdit || !selectedObjectId) return;
+    publish({ ...graph, objects: objects.filter((item) => item.id !== selectedObjectId) });
+    setSelectedObjectId(null);
   };
 
   return (
@@ -991,6 +1004,17 @@ function Whiteboard({ lessonId, board, onBoardChange, canEdit, profile }) {
               <Icon size={16}>category</Icon>
               Objects
             </div>
+            {selectedObjectId && (
+              <button
+                type="button"
+                disabled={!canEdit}
+                onClick={deleteSelectedObject}
+                className="mb-2 flex h-10 w-full items-center justify-center gap-2 rounded-xl border border-[#d9b8ad] bg-[#fff5f1] px-3 text-xs font-bold text-[#9a4f42] disabled:opacity-40"
+              >
+                <Icon size={18}>delete</Icon>
+                Delete selected
+              </button>
+            )}
             <div className="space-y-1 text-xs font-semibold text-[#595a53]">
               {objects.length ? (
                 objects.slice(-12).map((item) => (
