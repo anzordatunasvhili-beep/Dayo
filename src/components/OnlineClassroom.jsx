@@ -10,12 +10,16 @@ import {
 
 const channelName = (lessonId) => `lesson:${lessonId}:whiteboard`;
 const drawingTools = [
-  { id: "pen", icon: "draw", label: "Pen" },
-  { id: "eraser", icon: "ink_eraser", label: "Eraser" },
+  { id: "select", icon: "near_me", label: "Select" },
+  { id: "pan", icon: "pan_tool", label: "Pan" },
+  { id: "point", icon: "radio_button_checked", label: "Point" },
+  { id: "segment", icon: "show_chart", label: "Segment" },
   { id: "line", icon: "horizontal_rule", label: "Line" },
-  { id: "rectangle", icon: "crop_square", label: "Rectangle" },
   { id: "circle", icon: "radio_button_unchecked", label: "Circle" },
-  { id: "text", icon: "title", label: "Text" },
+  { id: "rectangle", icon: "crop_square", label: "Rectangle" },
+  { id: "pen", icon: "draw", label: "Free note" },
+  { id: "text", icon: "title", label: "Text note" },
+  { id: "eraser", icon: "ink_eraser", label: "Erase" },
 ];
 const tabs = [
   { id: "whiteboard", icon: "draw", label: "Board" },
@@ -23,7 +27,14 @@ const tabs = [
   { id: "screen", icon: "present_to_all", label: "Screen" },
   { id: "split", icon: "view_sidebar", label: "Split" },
 ];
-const emptyBoard = { operations: [], view: { x: 0, y: 0, scale: 1 } };
+const defaultBoardView = { x: 0, y: 0, scale: 48 };
+const createEmptyBoard = () => ({
+  expressions: [],
+  objects: [],
+  notes: [],
+  view: { ...defaultBoardView },
+});
+const emptyBoard = createEmptyBoard();
 
 function Icon({ children, size = 20 }) {
   return (
@@ -160,146 +171,495 @@ function RemoteAudio({ participant }) {
   return <div ref={audioRef} aria-hidden="true" className="fixed h-0 w-0 overflow-hidden" />;
 }
 
-function Whiteboard({ lessonId, board, onBoardChange, canEdit }) {
+function normalizeBoardData(data) {
+  if (Array.isArray(data)) return { ...createEmptyBoard(), notes: data };
+  if (!data || typeof data !== "object") return createEmptyBoard();
+  return {
+    expressions: Array.isArray(data.expressions) ? data.expressions : [],
+    objects: Array.isArray(data.objects) ? data.objects : [],
+    notes: Array.isArray(data.notes)
+      ? data.notes
+      : Array.isArray(data.operations)
+        ? data.operations
+        : [],
+    view: {
+      ...defaultBoardView,
+      ...(data.view && typeof data.view === "object" ? data.view : {}),
+      scale: Math.min(180, Math.max(16, Number(data.view?.scale) || defaultBoardView.scale)),
+    },
+  };
+}
+
+function boardSnapshot(board) {
+  const normalized = normalizeBoardData(board);
+  return JSON.parse(JSON.stringify(normalized));
+}
+
+function newBoardId() {
+  return globalThis.crypto?.randomUUID?.() || `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+}
+
+function parseExpression(raw) {
+  const input = raw.trim();
+  if (!input) return null;
+  const expression = input
+    .replace(/^y\s*=\s*/i, "")
+    .replace(/^f\s*\(\s*x\s*\)\s*=\s*/i, "")
+    .replace(/\bX\b/g, "x")
+    .replace(/\^/g, "**");
+  if (!/^[0-9xX+\-*/().,\s*a-zA-Z_]+$/.test(expression)) return null;
+  const allowed = new Set([
+    "x",
+    "sin",
+    "cos",
+    "tan",
+    "asin",
+    "acos",
+    "atan",
+    "sqrt",
+    "abs",
+    "log",
+    "ln",
+    "exp",
+    "pow",
+    "floor",
+    "ceil",
+    "round",
+    "min",
+    "max",
+    "pi",
+    "PI",
+    "e",
+    "E",
+  ]);
+  const identifiers = expression.match(/[a-zA-Z_]+/g) || [];
+  if (identifiers.some((name) => !allowed.has(name))) return null;
+  const js = expression
+    .replace(/\bln\s*\(/gi, "log(")
+    .replace(/\bpi\b/gi, "PI")
+    .replace(/\be\b/g, "E");
+  try {
+    const fn = new Function(
+      "x",
+      "M",
+      `const {sin,cos,tan,asin,acos,atan,sqrt,abs,log,exp,pow,floor,ceil,round,min,max,PI,E}=M; return (${js});`,
+    );
+    return (x) => Number(fn(x, Math));
+  } catch {
+    return null;
+  }
+}
+
+function Whiteboard({ lessonId, board, onBoardChange, canEdit, profile }) {
   const canvasRef = useRef(null);
-  const drawingRef = useRef(null);
+  const drawRef = useRef(null);
   const boardChannelRef = useRef(null);
   const panRef = useRef(null);
-  const [tool, setTool] = useState("pen");
-  const [color, setColor] = useState("#30312d");
+  const lastViewRef = useRef(null);
+  const [tool, setTool] = useState("select");
+  const [color, setColor] = useState("#2f6651");
   const [width, setWidth] = useState(3);
+  const [expression, setExpression] = useState("");
   const [history, setHistory] = useState([]);
   const [redo, setRedo] = useState([]);
-  const operations = Array.isArray(board?.operations) ? board.operations : [];
-  const view = board?.view || emptyBoard.view;
+  const [remoteViews, setRemoteViews] = useState({});
+  const graph = normalizeBoardData(board);
+  const view = graph.view;
+  const expressions = graph.expressions;
+  const objects = graph.objects;
+  const notes = graph.notes;
 
-  const redraw = (items = operations, nextView = view) => {
+  const screenPoint = (event) => {
+    const rect = canvasRef.current.getBoundingClientRect();
+    return [event.clientX - rect.left, event.clientY - rect.top];
+  };
+
+  const toScreen = ([x, y], nextView = view) => {
+    const canvas = canvasRef.current;
+    const widthPx = canvas?.clientWidth || 1;
+    const heightPx = canvas?.clientHeight || 1;
+    return [
+      widthPx / 2 + nextView.x + x * nextView.scale,
+      heightPx / 2 + nextView.y - y * nextView.scale,
+    ];
+  };
+
+  const toWorld = ([x, y], nextView = view) => {
+    const canvas = canvasRef.current;
+    const widthPx = canvas?.clientWidth || 1;
+    const heightPx = canvas?.clientHeight || 1;
+    return [
+      (x - widthPx / 2 - nextView.x) / nextView.scale,
+      (heightPx / 2 + nextView.y - y) / nextView.scale,
+    ];
+  };
+
+  const visibleWorld = (nextView = view) => {
+    const canvas = canvasRef.current;
+    const widthPx = canvas?.clientWidth || 1;
+    const heightPx = canvas?.clientHeight || 1;
+    const topLeft = toWorld([0, 0], nextView);
+    const bottomRight = toWorld([widthPx, heightPx], nextView);
+    return {
+      left: topLeft[0],
+      right: bottomRight[0],
+      top: topLeft[1],
+      bottom: bottomRight[1],
+    };
+  };
+
+  const graphStep = () => {
+    const raw = 42 / view.scale;
+    const power = 10 ** Math.floor(Math.log10(raw));
+    return [1, 2, 5, 10].find((item) => item * power >= raw) * power;
+  };
+
+  const drawGrid = (context) => {
+    const canvas = canvasRef.current;
+    const widthPx = canvas.clientWidth;
+    const heightPx = canvas.clientHeight;
+    const bounds = visibleWorld();
+    const step = graphStep();
+    context.lineWidth = 1;
+    context.strokeStyle = "#ece8dd";
+    context.fillStyle = "#8a887f";
+    context.font = "11px DM Sans, sans-serif";
+    for (let x = Math.floor(bounds.left / step) * step; x <= bounds.right; x += step) {
+      const [sx] = toScreen([x, 0]);
+      context.beginPath();
+      context.moveTo(sx, 0);
+      context.lineTo(sx, heightPx);
+      context.stroke();
+      if (Math.abs(x) > step / 4) context.fillText(Number(x.toPrecision(4)), sx + 4, heightPx / 2 + view.y + 14);
+    }
+    for (let y = Math.floor(bounds.bottom / step) * step; y <= bounds.top; y += step) {
+      const [, sy] = toScreen([0, y]);
+      context.beginPath();
+      context.moveTo(0, sy);
+      context.lineTo(widthPx, sy);
+      context.stroke();
+      if (Math.abs(y) > step / 4) context.fillText(Number(y.toPrecision(4)), widthPx / 2 + view.x + 6, sy - 4);
+    }
+    context.strokeStyle = "#85816f";
+    context.lineWidth = 1.5;
+    const [axisX] = toScreen([0, 0]);
+    const [, axisY] = toScreen([0, 0]);
+    context.beginPath();
+    context.moveTo(axisX, 0);
+    context.lineTo(axisX, heightPx);
+    context.moveTo(0, axisY);
+    context.lineTo(widthPx, axisY);
+    context.stroke();
+  };
+
+  const drawExpression = (context, item) => {
+    if (item.hidden) return;
+    const fn = parseExpression(item.value);
+    if (!fn) return;
+    const canvas = canvasRef.current;
+    const bounds = visibleWorld();
+    const samples = Math.min(900, Math.max(220, Math.floor(canvas.clientWidth * 1.2)));
+    context.strokeStyle = item.color;
+    context.lineWidth = 2.5;
+    context.lineJoin = "round";
+    context.lineCap = "round";
+    context.beginPath();
+    let drawing = false;
+    let previousY = null;
+    for (let index = 0; index <= samples; index += 1) {
+      const x = bounds.left + ((bounds.right - bounds.left) * index) / samples;
+      const y = fn(x);
+      const jump = previousY !== null && Math.abs(y - previousY) * view.scale > canvas.clientHeight * 0.7;
+      if (!Number.isFinite(y) || Math.abs(y) > 100000 || jump) {
+        drawing = false;
+        previousY = null;
+        continue;
+      }
+      const [sx, sy] = toScreen([x, y]);
+      if (drawing) context.lineTo(sx, sy);
+      else context.moveTo(sx, sy);
+      drawing = true;
+      previousY = y;
+    }
+    context.stroke();
+  };
+
+  const drawObject = (context, item) => {
+    context.strokeStyle = item.color;
+    context.fillStyle = item.color;
+    context.lineWidth = 2.5;
+    context.lineJoin = "round";
+    context.lineCap = "round";
+    if (item.kind === "point") {
+      const [x, y] = toScreen(item.point);
+      context.beginPath();
+      context.arc(x, y, 5, 0, Math.PI * 2);
+      context.fill();
+      context.font = "600 12px DM Sans, sans-serif";
+      context.fillText(item.label, x + 8, y - 8);
+      return;
+    }
+    const [aX, aY] = toScreen(item.a);
+    const [bX, bY] = toScreen(item.b);
+    context.beginPath();
+    if (item.kind === "segment") {
+      context.moveTo(aX, aY);
+      context.lineTo(bX, bY);
+    }
+    if (item.kind === "line") {
+      const bounds = visibleWorld();
+      const dx = item.b[0] - item.a[0];
+      const dy = item.b[1] - item.a[1];
+      if (Math.abs(dx) < 0.0001) {
+        const [sx1, sy1] = toScreen([item.a[0], bounds.bottom]);
+        const [sx2, sy2] = toScreen([item.a[0], bounds.top]);
+        context.moveTo(sx1, sy1);
+        context.lineTo(sx2, sy2);
+      } else {
+        const slope = dy / dx;
+        const y1 = item.a[1] + (bounds.left - item.a[0]) * slope;
+        const y2 = item.a[1] + (bounds.right - item.a[0]) * slope;
+        const [sx1, sy1] = toScreen([bounds.left, y1]);
+        const [sx2, sy2] = toScreen([bounds.right, y2]);
+        context.moveTo(sx1, sy1);
+        context.lineTo(sx2, sy2);
+      }
+    }
+    if (item.kind === "rectangle") context.rect(aX, aY, bX - aX, bY - aY);
+    if (item.kind === "circle") {
+      const radius = Math.hypot(bX - aX, bY - aY);
+      context.arc(aX, aY, radius, 0, Math.PI * 2);
+    }
+    context.stroke();
+    [item.a, item.b].forEach((point) => {
+      const [x, y] = toScreen(point);
+      context.beginPath();
+      context.arc(x, y, 3.5, 0, Math.PI * 2);
+      context.fill();
+    });
+  };
+
+  const drawNote = (context, item) => {
+    context.strokeStyle = item.color;
+    context.fillStyle = item.color;
+    context.lineWidth = item.width || width;
+    context.lineJoin = "round";
+    context.lineCap = "round";
+    if (item.kind === "text") {
+      const [x, y] = toScreen(item.point || [item.x || 0, item.y || 0]);
+      context.font = "600 16px DM Sans, sans-serif";
+      context.fillText(item.text, x, y);
+      return;
+    }
+    const points = item.points || [];
+    context.beginPath();
+    points.forEach((point, index) => {
+      const [x, y] = toScreen(point);
+      if (index) context.lineTo(x, y);
+      else context.moveTo(x, y);
+    });
+    context.stroke();
+  };
+
+  const drawRemoteViews = (context) => {
+    Object.values(remoteViews).forEach((item, index) => {
+      if (!item?.view) return;
+      const remote = visibleWorld(item.view);
+      const [x1, y1] = toScreen([remote.left, remote.top]);
+      const [x2, y2] = toScreen([remote.right, remote.bottom]);
+      const hue = (index * 74 + 165) % 360;
+      context.strokeStyle = `hsl(${hue} 45% 48%)`;
+      context.fillStyle = `hsl(${hue} 45% 48% / 0.08)`;
+      context.lineWidth = 2;
+      context.fillRect(x1, y1, x2 - x1, y2 - y1);
+      context.strokeRect(x1, y1, x2 - x1, y2 - y1);
+      context.font = "700 11px DM Sans, sans-serif";
+      context.fillStyle = `hsl(${hue} 45% 34%)`;
+      context.fillText(item.name || "Viewer", x1 + 8, y1 + 18);
+    });
+  };
+
+  const redraw = (draft = null, nextGraph = graph) => {
     const canvas = canvasRef.current;
     if (!canvas) return;
     const context = canvas.getContext("2d");
-    context.clearRect(0, 0, canvas.width, canvas.height);
-    context.save();
-    context.scale(window.devicePixelRatio, window.devicePixelRatio);
-    context.translate(nextView.x, nextView.y);
-    context.scale(nextView.scale, nextView.scale);
-    items.forEach((item) => {
-      context.strokeStyle = item.color;
-      context.fillStyle = item.color;
-      context.lineWidth = item.width;
-      context.lineCap = "round";
-      context.lineJoin = "round";
-      if (item.kind === "text") {
-        context.font = "20px DM Sans, sans-serif";
-        context.fillText(item.text, item.x, item.y);
-      } else if (item.kind === "path") {
-        context.beginPath();
-        item.points.forEach(([x, y], index) =>
-          index ? context.lineTo(x, y) : context.moveTo(x, y),
-        );
-        context.stroke();
-      } else {
-        context.beginPath();
-        if (item.kind === "line") {
-          context.moveTo(item.x, item.y);
-          context.lineTo(item.x2, item.y2);
-        }
-        if (item.kind === "rectangle") {
-          context.rect(item.x, item.y, item.x2 - item.x, item.y2 - item.y);
-        }
-        if (item.kind === "circle") {
-          const radius = Math.hypot(item.x2 - item.x, item.y2 - item.y);
-          context.arc(item.x, item.y, radius, 0, Math.PI * 2);
-        }
-        context.stroke();
-      }
-    });
-    context.restore();
+    const dpr = window.devicePixelRatio || 1;
+    context.setTransform(dpr, 0, 0, dpr, 0, 0);
+    context.clearRect(0, 0, canvas.clientWidth, canvas.clientHeight);
+    drawGrid(context);
+    nextGraph.expressions.forEach((item) => drawExpression(context, item));
+    nextGraph.objects.forEach((item) => drawObject(context, item));
+    nextGraph.notes.forEach((item) => drawNote(context, item));
+    if (draft?.kind === "path") drawNote(context, draft);
+    if (draft && ["segment", "line", "circle", "rectangle"].includes(draft.kind)) {
+      drawObject(context, draft);
+    }
+    drawRemoteViews(context);
   };
 
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return undefined;
     const resize = () => {
-      canvas.width = canvas.clientWidth * window.devicePixelRatio;
-      canvas.height = canvas.clientHeight * window.devicePixelRatio;
+      const dpr = window.devicePixelRatio || 1;
+      canvas.width = Math.max(1, Math.floor(canvas.clientWidth * dpr));
+      canvas.height = Math.max(1, Math.floor(canvas.clientHeight * dpr));
       redraw();
     };
     resize();
     window.addEventListener("resize", resize);
     return () => window.removeEventListener("resize", resize);
-  }, [operations, view]);
+  }, [board, remoteViews]);
 
   useEffect(() => {
     if (!supabase) return undefined;
     let active = true;
-    const handler = ({ payload }) => {
-      if (active && payload?.type === "replace") {
-        onBoardChange({
-          operations: payload.operations || [],
-          view: payload.view || emptyBoard.view,
-        });
-      }
-    };
     const boardChannel = supabase.channel(`${channelName(lessonId)}:board`);
-    boardChannel.on("broadcast", { event: "board" }, handler).subscribe();
+    boardChannel
+      .on("broadcast", { event: "board" }, ({ payload }) => {
+        if (active && payload?.type === "replace") onBoardChange(normalizeBoardData(payload.board));
+      })
+      .on("broadcast", { event: "viewport" }, ({ payload }) => {
+        if (!active || !payload?.user_id || payload.user_id === profile?.id) return;
+        setRemoteViews((current) => ({
+          ...current,
+          [payload.user_id]: {
+            name: payload.name,
+            view: payload.view,
+            at: Date.now(),
+          },
+        }));
+      })
+      .subscribe();
     boardChannelRef.current = boardChannel;
     return () => {
       active = false;
       boardChannelRef.current = null;
       supabase.removeChannel(boardChannel);
     };
-  }, [lessonId]);
+  }, [lessonId, profile?.id]);
 
-  const broadcast = (nextOperations, nextView = view) => {
+  useEffect(() => {
+    const timer = window.setInterval(() => {
+      setRemoteViews((current) =>
+        Object.fromEntries(Object.entries(current).filter(([, item]) => Date.now() - item.at < 45000)),
+      );
+    }, 12000);
+    return () => window.clearInterval(timer);
+  }, []);
+
+  const sendViewport = (nextView) => {
+    const key = JSON.stringify(nextView);
+    if (lastViewRef.current === key) return;
+    lastViewRef.current = key;
     boardChannelRef.current?.send({
       type: "broadcast",
-      event: "board",
-      payload: { type: "replace", operations: nextOperations, view: nextView },
+      event: "viewport",
+      payload: {
+        user_id: profile?.id,
+        name: `${profile?.first_name || ""} ${profile?.last_name || ""}`.trim() || "Viewer",
+        view: nextView,
+      },
     });
   };
 
-  const publish = (nextOperations, nextView = view, save = true) => {
-    setHistory((current) => [...current, { operations, view }]);
-    setRedo([]);
-    onBoardChange({ operations: nextOperations, view: nextView });
-    broadcast(nextOperations, nextView);
-    if (save) saveWhiteboard(lessonId, nextOperations).catch(() => {});
+  const broadcastBoard = (nextGraph) => {
+    boardChannelRef.current?.send({
+      type: "broadcast",
+      event: "board",
+      payload: { type: "replace", board: nextGraph },
+    });
   };
 
-  const point = (event) => {
-    const rect = canvasRef.current.getBoundingClientRect();
-    return [
-      (event.clientX - rect.left - view.x) / view.scale,
-      (event.clientY - rect.top - view.y) / view.scale,
-    ];
+  const publish = (nextGraph, save = true) => {
+    const normalized = normalizeBoardData(nextGraph);
+    setHistory((current) => [...current.slice(-39), boardSnapshot(graph)]);
+    setRedo([]);
+    onBoardChange(normalized);
+    broadcastBoard(normalized);
+    if (save) saveWhiteboard(lessonId, normalized).catch(() => {});
   };
 
   const restore = (next, nextHistory, nextRedo) => {
+    const normalized = normalizeBoardData(next);
     setHistory(nextHistory);
     setRedo(nextRedo);
-    onBoardChange(next);
-    broadcast(next.operations, next.view);
-    saveWhiteboard(lessonId, next.operations).catch(() => {});
+    onBoardChange(normalized);
+    broadcastBoard(normalized);
+    saveWhiteboard(lessonId, normalized).catch(() => {});
   };
 
-  const setView = (nextView) => {
-    onBoardChange({ operations, view: nextView });
-    broadcast(operations, nextView);
+  const setView = (nextView, announce = true) => {
+    const nextGraph = { ...graph, view: nextView };
+    onBoardChange(nextGraph);
+    redraw(null, nextGraph);
+    if (announce) sendViewport(nextView);
   };
 
-  const zoom = (delta) => {
-    const nextScale = Math.min(2.5, Math.max(0.5, Number((view.scale + delta).toFixed(2))));
-    setView({ ...view, scale: nextScale });
+  const zoom = (factor) => {
+    const canvas = canvasRef.current;
+    const center = [canvas.clientWidth / 2, canvas.clientHeight / 2];
+    const before = toWorld(center);
+    const nextScale = Math.min(180, Math.max(16, Number((view.scale * factor).toFixed(2))));
+    const nextView = {
+      ...view,
+      scale: nextScale,
+      x: center[0] - canvas.clientWidth / 2 - before[0] * nextScale,
+      y: before[1] * nextScale - canvas.clientHeight / 2 + center[1],
+    };
+    setView(nextView);
   };
 
-  const resetView = () => setView(emptyBoard.view);
+  const resetView = () => setView({ ...defaultBoardView });
 
-  const startPan = (event) => {
+  const addExpression = () => {
+    if (!canEdit || !parseExpression(expression)) return;
+    publish({
+      ...graph,
+      expressions: [
+        ...expressions,
+        {
+          id: newBoardId(),
+          value: expression.trim(),
+          color,
+        },
+      ],
+    });
+    setExpression("");
+  };
+
+  const removeExpression = (id) => {
+    publish({ ...graph, expressions: expressions.filter((item) => item.id !== id) });
+  };
+
+  const updateExpression = (id, value) => {
+    publish({
+      ...graph,
+      expressions: expressions.map((item) => (item.id === id ? { ...item, value } : item)),
+    });
+  };
+
+  const eraseAt = (point) => {
+    const distance = (a, b) => Math.hypot(a[0] - b[0], a[1] - b[1]);
+    const threshold = 16 / view.scale;
+    const nextObjects = objects.filter((item) => {
+      if (item.kind === "point") return distance(item.point, point) > threshold;
+      return distance(item.a, point) > threshold && distance(item.b, point) > threshold;
+    });
+    const nextNotes = notes.filter((item) => {
+      const points = item.points || [item.point || [item.x, item.y]];
+      return !points.some((candidate) => distance(candidate, point) < threshold);
+    });
+    if (nextObjects.length !== objects.length || nextNotes.length !== notes.length) {
+      publish({ ...graph, objects: nextObjects, notes: nextNotes });
+    }
+  };
+
+  const beginPan = (event) => {
     panRef.current = {
-      pointerId: event.pointerId,
       x: event.clientX,
       y: event.clientY,
-      view,
+      view: { ...view },
     };
     canvasRef.current.setPointerCapture(event.pointerId);
   };
@@ -311,172 +671,267 @@ function Whiteboard({ lessonId, board, onBoardChange, canEdit }) {
       x: panRef.current.view.x + event.clientX - panRef.current.x,
       y: panRef.current.view.y + event.clientY - panRef.current.y,
     };
-    onBoardChange({ operations, view: nextView });
-    redraw(operations, nextView);
+    setView(nextView);
   };
 
   const endPan = () => {
     if (!panRef.current) return;
     panRef.current = null;
-    broadcast(operations, view);
+    sendViewport(view);
+  };
+
+  const followViewport = (nextView) => setView({ ...defaultBoardView, ...nextView });
+
+  const clearBoard = () => {
+    const next = createEmptyBoard();
+    next.view = { ...view };
+    publish(next);
   };
 
   return (
-    <div className="flex h-full min-h-0 flex-col overflow-hidden rounded-2xl border border-[#e5e2dc] bg-white">
-      <div className="flex items-center gap-2 overflow-x-auto border-b border-[#eee] bg-[#fbfaf7] p-2">
-        <div className="flex shrink-0 gap-1">
+    <div className="grid h-full min-h-0 overflow-hidden rounded-2xl border border-[#dedbd2] bg-white lg:grid-cols-[minmax(220px,300px)_1fr]">
+      <aside className="flex min-h-0 flex-col border-b border-[#ece8dd] bg-[#fbfaf7] lg:border-b-0 lg:border-r">
+        <div className="flex items-center gap-2 overflow-x-auto border-b border-[#ece8dd] p-2 lg:flex-wrap lg:overflow-visible">
           {drawingTools.map((item) => (
             <button
               key={item.id}
-              disabled={!canEdit}
+              disabled={!canEdit && !["pan", "select"].includes(item.id)}
               title={item.label}
               onClick={() => setTool(item.id)}
-              className={`grid h-9 w-9 place-items-center rounded-xl border text-[#30312d] transition ${
+              className={`grid h-10 w-10 shrink-0 place-items-center rounded-xl border text-[#30312d] transition ${
                 tool === item.id
                   ? "border-[#30312d] bg-[#30312d] text-white"
-                  : "border-[#e5e2dc] bg-white hover:bg-[#f1efe9]"
+                  : "border-[#dedbd2] bg-white hover:bg-[#f1efe9]"
               } disabled:cursor-not-allowed disabled:opacity-45`}
             >
-              <Icon size={19}>{item.icon}</Icon>
+              <Icon size={20}>{item.icon}</Icon>
             </button>
           ))}
+          <label className="grid h-10 w-10 shrink-0 place-items-center rounded-xl border border-[#dedbd2] bg-white" title="Color">
+            <input
+              type="color"
+              value={color}
+              onChange={(event) => setColor(event.target.value)}
+              disabled={!canEdit}
+              className="h-6 w-6 border-0 bg-transparent p-0"
+            />
+          </label>
+          <label className="flex h-10 shrink-0 items-center gap-2 rounded-xl border border-[#dedbd2] bg-white px-3">
+            <Icon size={18}>line_weight</Icon>
+            <input
+              type="range"
+              min="1"
+              max="12"
+              value={width}
+              onChange={(event) => setWidth(Number(event.target.value))}
+              disabled={!canEdit}
+              className="w-20 accent-[#30312d]"
+            />
+          </label>
         </div>
-        <label
-          className="grid h-9 w-9 place-items-center rounded-xl border border-[#e5e2dc] bg-white"
-          title="Color"
-        >
-          <input
-            type="color"
-            value={color}
-            onChange={(event) => setColor(event.target.value)}
-            disabled={!canEdit}
-            className="h-6 w-6 border-0 bg-transparent p-0"
-          />
-        </label>
-        <label className="flex h-9 items-center gap-2 rounded-xl border border-[#e5e2dc] bg-white px-3">
-          <Icon size={18}>line_weight</Icon>
-          <input
-            type="range"
-            min="1"
-            max="14"
-            value={width}
-            onChange={(event) => setWidth(Number(event.target.value))}
-            disabled={!canEdit}
-            className="w-24 accent-[#30312d]"
-          />
-        </label>
-        <div className="ml-auto flex shrink-0 gap-1">
+
+        <div className="min-h-0 flex-1 space-y-3 overflow-auto p-3">
+          <section>
+            <div className="mb-2 flex items-center gap-2 text-xs font-bold uppercase tracking-[0.08em] text-[#66675f]">
+              <Icon size={16}>functions</Icon>
+              Graphs
+            </div>
+            <div className="flex gap-2">
+              <input
+                value={expression}
+                onChange={(event) => setExpression(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter") addExpression();
+                }}
+                disabled={!canEdit}
+                placeholder="y = sin(x)"
+                className="min-w-0 flex-1 rounded-xl border border-[#dedbd2] bg-white px-3 py-2 text-sm text-[#30312d] outline-none focus:border-[#30312d]"
+              />
+              <button
+                disabled={!canEdit || !parseExpression(expression)}
+                onClick={addExpression}
+                title="Add graph"
+                className="grid h-10 w-10 place-items-center rounded-xl bg-[#30312d] text-white disabled:opacity-40"
+              >
+                <Icon size={20}>add</Icon>
+              </button>
+            </div>
+            <div className="mt-2 space-y-1">
+              {expressions.map((item) => (
+                <div key={item.id} className="flex items-center gap-2 rounded-xl border border-[#e8e4da] bg-white px-2 py-1.5">
+                  <span className="h-3 w-3 rounded-full" style={{ background: item.color }} />
+                  <input
+                    value={item.value}
+                    disabled={!canEdit}
+                    onChange={(event) => updateExpression(item.id, event.target.value)}
+                    className="min-w-0 flex-1 bg-transparent text-sm font-semibold text-[#30312d] outline-none"
+                  />
+                  <button disabled={!canEdit} onClick={() => removeExpression(item.id)} title="Remove graph" className="text-[#a35645] disabled:opacity-40">
+                    <Icon size={18}>close</Icon>
+                  </button>
+                </div>
+              ))}
+            </div>
+          </section>
+
+          <section>
+            <div className="mb-2 flex items-center gap-2 text-xs font-bold uppercase tracking-[0.08em] text-[#66675f]">
+              <Icon size={16}>category</Icon>
+              Objects
+            </div>
+            <div className="space-y-1 text-xs font-semibold text-[#595a53]">
+              {objects.length ? (
+                objects.slice(-12).map((item) => (
+                  <div key={item.id} className="flex items-center justify-between rounded-xl border border-[#e8e4da] bg-white px-3 py-2">
+                    <span>{item.label || item.kind}</span>
+                    <span className="h-2.5 w-2.5 rounded-full" style={{ background: item.color }} />
+                  </div>
+                ))
+              ) : (
+                <div className="rounded-xl border border-dashed border-[#d8d3c7] px-3 py-3 text-[#85816f]">
+                  Points, lines, circles, and rectangles stay editable as objects.
+                </div>
+              )}
+            </div>
+          </section>
+
+          <section>
+            <div className="mb-2 flex items-center gap-2 text-xs font-bold uppercase tracking-[0.08em] text-[#66675f]">
+              <Icon size={16}>visibility</Icon>
+              Viewports
+            </div>
+            <div className="space-y-1">
+              {Object.entries(remoteViews).length ? (
+                Object.entries(remoteViews).map(([id, item]) => (
+                  <button
+                    key={id}
+                    onClick={() => followViewport(item.view)}
+                    className="flex w-full items-center gap-2 rounded-xl border border-[#e8e4da] bg-white px-3 py-2 text-left text-xs font-bold text-[#30312d]"
+                  >
+                    <Icon size={17}>center_focus_strong</Icon>
+                    <span className="min-w-0 flex-1 truncate">{item.name || "Viewer"}</span>
+                  </button>
+                ))
+              ) : (
+                <div className="rounded-xl border border-dashed border-[#d8d3c7] px-3 py-3 text-xs font-semibold text-[#85816f]">
+                  Other people will appear here when they move around the board.
+                </div>
+              )}
+            </div>
+          </section>
+        </div>
+
+        <div className="flex items-center gap-1 border-t border-[#ece8dd] p-2">
           <button
             disabled={!canEdit || !history.length}
             title="Undo"
-            onClick={() => {
-              const previous = history.at(-1);
-              restore(previous, history.slice(0, -1), [...redo, { operations, view }]);
-            }}
-            className="grid h-9 w-9 place-items-center rounded-xl border border-[#e5e2dc] bg-white disabled:opacity-45"
+            onClick={() => restore(history.at(-1), history.slice(0, -1), [...redo, boardSnapshot(graph)])}
+            className="grid h-10 w-10 place-items-center rounded-xl border border-[#dedbd2] bg-white disabled:opacity-40"
           >
-            <Icon size={19}>undo</Icon>
+            <Icon size={20}>undo</Icon>
           </button>
           <button
             disabled={!canEdit || !redo.length}
             title="Redo"
-            onClick={() => {
-              const next = redo.at(-1);
-              restore(next, [...history, { operations, view }], redo.slice(0, -1));
-            }}
-            className="grid h-9 w-9 place-items-center rounded-xl border border-[#e5e2dc] bg-white disabled:opacity-45"
+            onClick={() => restore(redo.at(-1), [...history, boardSnapshot(graph)], redo.slice(0, -1))}
+            className="grid h-10 w-10 place-items-center rounded-xl border border-[#dedbd2] bg-white disabled:opacity-40"
           >
-            <Icon size={19}>redo</Icon>
+            <Icon size={20}>redo</Icon>
           </button>
           <button
             disabled={!canEdit}
             title="Clear board"
-            onClick={() => publish([])}
-            className="grid h-9 w-9 place-items-center rounded-xl border border-[#e5e2dc] bg-white text-[#a35645] disabled:opacity-45"
+            onClick={clearBoard}
+            className="grid h-10 w-10 place-items-center rounded-xl border border-[#dedbd2] bg-white text-[#a35645] disabled:opacity-40"
           >
-            <Icon size={19}>delete</Icon>
+            <Icon size={20}>delete</Icon>
           </button>
-          <button
-            title="Zoom out"
-            onClick={() => zoom(-0.1)}
-            className="grid h-9 w-9 place-items-center rounded-xl border border-[#e5e2dc] bg-white"
-          >
-            <Icon size={19}>zoom_out</Icon>
-          </button>
-          <button
-            title="Reset view"
-            onClick={resetView}
-            className="grid h-9 w-9 place-items-center rounded-xl border border-[#e5e2dc] bg-white"
-          >
-            <Icon size={19}>center_focus_strong</Icon>
-          </button>
-          <button
-            title="Zoom in"
-            onClick={() => zoom(0.1)}
-            className="grid h-9 w-9 place-items-center rounded-xl border border-[#e5e2dc] bg-white"
-          >
-            <Icon size={19}>zoom_in</Icon>
-          </button>
+          <div className="ml-auto flex gap-1">
+            <button title="Zoom out" onClick={() => zoom(0.82)} className="grid h-10 w-10 place-items-center rounded-xl border border-[#dedbd2] bg-white">
+              <Icon size={20}>zoom_out</Icon>
+            </button>
+            <button title="Reset view" onClick={resetView} className="grid h-10 w-10 place-items-center rounded-xl border border-[#dedbd2] bg-white">
+              <Icon size={20}>my_location</Icon>
+            </button>
+            <button title="Zoom in" onClick={() => zoom(1.18)} className="grid h-10 w-10 place-items-center rounded-xl border border-[#dedbd2] bg-white">
+              <Icon size={20}>zoom_in</Icon>
+            </button>
+          </div>
         </div>
-      </div>
+      </aside>
+
       <canvas
         ref={canvasRef}
-        className="min-h-[340px] flex-1 touch-none bg-white"
+        className="min-h-[420px] flex-1 touch-none bg-white"
+        onWheel={(event) => {
+          event.preventDefault();
+          zoom(event.deltaY > 0 ? 0.9 : 1.1);
+        }}
         onPointerDown={(event) => {
-          if (event.button === 1) {
+          if (event.button === 1 || tool === "pan") {
             event.preventDefault();
-            startPan(event);
+            beginPan(event);
             return;
           }
           if (!canEdit) return;
-          const [x, y] = point(event);
-          if (tool === "text") {
-            const text = window.prompt("Text");
-            if (text) publish([...operations, { kind: "text", text, x, y, color, width }]);
+          const world = toWorld(screenPoint(event));
+          if (tool === "eraser") {
+            eraseAt(world);
             return;
           }
-          drawingRef.current = { x, y, points: [[x, y]] };
-          canvasRef.current.setPointerCapture(event.pointerId);
+          if (tool === "text") {
+            const text = window.prompt("Text note");
+            if (text) publish({ ...graph, notes: [...notes, { id: newBoardId(), kind: "text", text, point: world, color, width }] });
+            return;
+          }
+          if (tool === "point") {
+            publish({
+              ...graph,
+              objects: [
+                ...objects,
+                { id: newBoardId(), kind: "point", point: world, color, label: `P${objects.length + 1}` },
+              ],
+            });
+            return;
+          }
+          if (["segment", "line", "circle", "rectangle"].includes(tool)) {
+            drawRef.current = { kind: tool, a: world, b: world, color, id: newBoardId(), label: tool };
+            canvasRef.current.setPointerCapture(event.pointerId);
+            return;
+          }
+          if (tool === "pen") {
+            drawRef.current = { id: newBoardId(), kind: "path", points: [world], color, width };
+            canvasRef.current.setPointerCapture(event.pointerId);
+          }
         }}
         onPointerMove={(event) => {
           if (panRef.current) {
             movePan(event);
             return;
           }
-          if (!drawingRef.current) return;
-          const [x, y] = point(event);
-          drawingRef.current.points.push([x, y]);
-          redraw([
-            ...operations,
-            {
-              ...drawingRef.current,
-              kind: "path",
-              color: tool === "eraser" ? "#ffffff" : color,
-              width: tool === "eraser" ? width * 5 : width,
-            },
-          ]);
+          if (!drawRef.current) return;
+          const world = toWorld(screenPoint(event));
+          if (drawRef.current.kind === "path") {
+            drawRef.current.points.push(world);
+          } else {
+            drawRef.current.b = world;
+          }
+          redraw(drawRef.current);
         }}
         onPointerUp={(event) => {
           if (panRef.current) {
             endPan(event);
             return;
           }
-          if (!drawingRef.current) return;
-          const draft = drawingRef.current;
-          drawingRef.current = null;
-          const [x2, y2] = point(event);
-          const kind = ["line", "rectangle", "circle"].includes(tool) ? tool : "path";
-          publish([
-            ...operations,
-            {
-              ...draft,
-              kind,
-              x2,
-              y2,
-              color: tool === "eraser" ? "#ffffff" : color,
-              width: tool === "eraser" ? width * 5 : width,
-            },
-          ]);
+          if (!drawRef.current) return;
+          const draft = drawRef.current;
+          drawRef.current = null;
+          if (draft.kind === "path") {
+            if (draft.points.length > 1) publish({ ...graph, notes: [...notes, draft] });
+            return;
+          }
+          const distance = Math.hypot(draft.a[0] - draft.b[0], draft.a[1] - draft.b[1]);
+          if (distance > 0.02) publish({ ...graph, objects: [...objects, draft] });
         }}
         onAuxClick={(event) => event.preventDefault()}
       />
@@ -551,10 +1006,7 @@ export default function OnlineClassroom({ lesson, profile, onLeave }) {
         ]);
         if (!active) return;
         setChat(classroom.chat);
-        setBoard({
-          operations: classroom.whiteboard?.data || [],
-          view: emptyBoard.view,
-        });
+        setBoard(normalizeBoardData(classroom.whiteboard?.data));
         realtime = supabase.channel(channelName(lesson.id), {
           config: { presence: { key: profile.id } },
         });
@@ -617,7 +1069,7 @@ export default function OnlineClassroom({ lesson, profile, onLeave }) {
             event: "classroom:end",
             payload: { lesson_id: lesson.id },
           });
-          saveWhiteboard(lesson.id, []).catch(() => {});
+          saveWhiteboard(lesson.id, createEmptyBoard()).catch(() => {});
         }
         realtime.untrack();
         supabase.removeChannel(realtime);
@@ -647,9 +1099,9 @@ export default function OnlineClassroom({ lesson, profile, onLeave }) {
   const leaveClassroom = async () => {
     if (profile.role === "teacher") {
       endedRef.current = true;
-      setBoard(emptyBoard);
+      setBoard(createEmptyBoard());
       try {
-        await saveWhiteboard(lesson.id, []);
+        await saveWhiteboard(lesson.id, createEmptyBoard());
         await classroomChannelRef.current?.send({
           type: "broadcast",
           event: "classroom:end",
@@ -867,10 +1319,10 @@ export default function OnlineClassroom({ lesson, profile, onLeave }) {
       <div className="grid min-h-0 flex-1 gap-3 lg:grid-cols-[1fr_320px]">
         <main className="min-h-0">
           {tab === "whiteboard" ? (
-            <Whiteboard lessonId={lesson.id} board={board} onBoardChange={setBoard} canEdit />
+            <Whiteboard lessonId={lesson.id} board={board} onBoardChange={setBoard} canEdit profile={profile} />
           ) : tab === "split" ? (
             <div className="grid h-full gap-3 lg:grid-cols-2">
-              <Whiteboard lessonId={lesson.id} board={board} onBoardChange={setBoard} canEdit />
+              <Whiteboard lessonId={lesson.id} board={board} onBoardChange={setBoard} canEdit profile={profile} />
               {videoStage()}
             </div>
           ) : (
