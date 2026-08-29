@@ -335,6 +335,32 @@ function Whiteboard({ lessonId, board, onBoardChange, canEdit, profile }) {
     return [1, 2, 5, 10].find((item) => item * power >= raw) * power;
   };
 
+  const objectAnchorPoints = () =>
+    objects.flatMap((item) => {
+      if (item.kind === "point") return [item.point];
+      return [item.a, item.b].filter(Boolean);
+    });
+
+  const snapWorldPoint = (screen, { preferObjects = true } = {}) => {
+    const raw = toWorld(screen);
+    if (preferObjects) {
+      const nearest = objectAnchorPoints().reduce(
+        (best, point) => {
+          const [x, y] = toScreen(point);
+          const distance = Math.hypot(x - screen[0], y - screen[1]);
+          return distance < best.distance ? { point, distance } : best;
+        },
+        { point: null, distance: 15 },
+      );
+      if (nearest.point) return [...nearest.point];
+    }
+    const step = graphStep();
+    return [
+      Number((Math.round(raw[0] / step) * step).toPrecision(10)),
+      Number((Math.round(raw[1] / step) * step).toPrecision(10)),
+    ];
+  };
+
   const drawGrid = (context) => {
     const canvas = canvasRef.current;
     const widthPx = canvas.clientWidth;
@@ -500,6 +526,24 @@ function Whiteboard({ lessonId, board, onBoardChange, canEdit, profile }) {
     });
   };
 
+  const drawSnapMarker = (context, point) => {
+    if (!point) return;
+    const [x, y] = toScreen(point);
+    context.strokeStyle = "#2f6651";
+    context.fillStyle = "rgb(47 102 81 / 0.12)";
+    context.lineWidth = 2;
+    context.beginPath();
+    context.arc(x, y, 9, 0, Math.PI * 2);
+    context.fill();
+    context.stroke();
+    context.beginPath();
+    context.moveTo(x - 13, y);
+    context.lineTo(x + 13, y);
+    context.moveTo(x, y - 13);
+    context.lineTo(x, y + 13);
+    context.stroke();
+  };
+
   const redraw = (draft = null, nextGraph = graph) => {
     const canvas = canvasRef.current;
     if (!canvas) return;
@@ -515,6 +559,7 @@ function Whiteboard({ lessonId, board, onBoardChange, canEdit, profile }) {
     if (draft && ["segment", "line", "circle", "rectangle"].includes(draft.kind)) {
       drawObject(context, draft);
     }
+    drawSnapMarker(context, draft?.snap);
     drawRemoteViews(context);
   };
 
@@ -912,7 +957,8 @@ function Whiteboard({ lessonId, board, onBoardChange, canEdit, profile }) {
             return;
           }
           if (!canEdit) return;
-          const world = toWorld(screenPoint(event));
+          const screen = screenPoint(event);
+          const world = toWorld(screen);
           if (tool === "eraser") {
             eraseAt(world);
             return;
@@ -923,17 +969,27 @@ function Whiteboard({ lessonId, board, onBoardChange, canEdit, profile }) {
             return;
           }
           if (tool === "point") {
+            const snapped = snapWorldPoint(screen, { preferObjects: false });
             publish({
               ...graph,
               objects: [
                 ...objects,
-                { id: newBoardId(), kind: "point", point: world, color, label: `P${objects.length + 1}` },
+                { id: newBoardId(), kind: "point", point: snapped, color, label: `P${objects.length + 1}` },
               ],
             });
             return;
           }
           if (["segment", "line", "circle", "rectangle"].includes(tool)) {
-            drawRef.current = { kind: tool, a: world, b: world, color, id: newBoardId(), label: tool };
+            const snapped = snapWorldPoint(screen);
+            drawRef.current = {
+              kind: tool,
+              a: snapped,
+              b: snapped,
+              snap: snapped,
+              color,
+              id: newBoardId(),
+              label: tool,
+            };
             canvasRef.current.setPointerCapture(event.pointerId);
             return;
           }
@@ -948,11 +1004,13 @@ function Whiteboard({ lessonId, board, onBoardChange, canEdit, profile }) {
             return;
           }
           if (!drawRef.current) return;
-          const world = toWorld(screenPoint(event));
+          const screen = screenPoint(event);
+          const world = drawRef.current.kind === "path" ? toWorld(screen) : snapWorldPoint(screen);
           if (drawRef.current.kind === "path") {
             drawRef.current.points.push(world);
           } else {
             drawRef.current.b = world;
+            drawRef.current.snap = world;
           }
           redraw(drawRef.current);
         }}
@@ -968,6 +1026,7 @@ function Whiteboard({ lessonId, board, onBoardChange, canEdit, profile }) {
             if (draft.points.length > 1) publish({ ...graph, notes: [...notes, draft] });
             return;
           }
+          delete draft.snap;
           const distance = Math.hypot(draft.a[0] - draft.b[0], draft.a[1] - draft.b[1]);
           if (distance > 0.02) publish({ ...graph, objects: [...objects, draft] });
         }}
