@@ -9,17 +9,38 @@ import {
 } from "../lib/api";
 
 const channelName = (lessonId) => `lesson:${lessonId}:whiteboard`;
-const drawingTools = [
-  { id: "select", icon: "near_me", label: "Select" },
-  { id: "pan", icon: "pan_tool", label: "Pan" },
-  { id: "point", icon: "radio_button_checked", label: "Point" },
-  { id: "segment", icon: "show_chart", label: "Segment" },
-  { id: "line", icon: "horizontal_rule", label: "Line" },
-  { id: "circle", icon: "radio_button_unchecked", label: "Circle" },
-  { id: "rectangle", icon: "crop_square", label: "Rectangle" },
-  { id: "pen", icon: "draw", label: "Free note" },
-  { id: "text", icon: "title", label: "Text note" },
-  { id: "eraser", icon: "ink_eraser", label: "Erase" },
+const drawingToolGroups = [
+  {
+    id: "navigate",
+    label: "Navigate",
+    icon: "open_with",
+    tools: [
+      { id: "select", icon: "near_me", label: "Select" },
+      { id: "pan", icon: "pan_tool", label: "Pan" },
+    ],
+  },
+  {
+    id: "objects",
+    label: "Objects",
+    icon: "category",
+    tools: [
+      { id: "point", icon: "radio_button_checked", label: "Point" },
+      { id: "segment", icon: "show_chart", label: "Segment" },
+      { id: "line", icon: "horizontal_rule", label: "Line" },
+      { id: "circle", icon: "radio_button_unchecked", label: "Circle" },
+      { id: "rectangle", icon: "crop_square", label: "Rectangle" },
+    ],
+  },
+  {
+    id: "drawing",
+    label: "Drawing",
+    icon: "draw",
+    tools: [
+      { id: "pen", icon: "draw", label: "Free note" },
+      { id: "text", icon: "title", label: "Text note" },
+      { id: "eraser", icon: "ink_eraser", label: "Erase" },
+    ],
+  },
 ];
 const tabs = [
   { id: "whiteboard", icon: "draw", label: "Board" },
@@ -689,48 +710,65 @@ function Whiteboard({ lessonId, board, onBoardChange, canEdit, profile }) {
   };
 
   return (
-    <div className="grid h-full min-h-0 overflow-hidden rounded-2xl border border-[#dedbd2] bg-white lg:grid-cols-[minmax(220px,300px)_1fr]">
-      <aside className="flex min-h-0 flex-col border-b border-[#ece8dd] bg-[#fbfaf7] lg:border-b-0 lg:border-r">
-        <div className="flex items-center gap-2 overflow-x-auto border-b border-[#ece8dd] p-2 lg:flex-wrap lg:overflow-visible">
-          {drawingTools.map((item) => (
-            <button
-              key={item.id}
-              disabled={!canEdit && !["pan", "select"].includes(item.id)}
-              title={item.label}
-              onClick={() => setTool(item.id)}
-              className={`grid h-10 w-10 shrink-0 place-items-center rounded-xl border text-[#30312d] transition ${
-                tool === item.id
-                  ? "border-[#30312d] bg-[#30312d] text-white"
-                  : "border-[#dedbd2] bg-white hover:bg-[#f1efe9]"
-              } disabled:cursor-not-allowed disabled:opacity-45`}
-            >
-              <Icon size={20}>{item.icon}</Icon>
-            </button>
-          ))}
-          <label className="grid h-10 w-10 shrink-0 place-items-center rounded-xl border border-[#dedbd2] bg-white" title="Color">
-            <input
-              type="color"
-              value={color}
-              onChange={(event) => setColor(event.target.value)}
-              disabled={!canEdit}
-              className="h-6 w-6 border-0 bg-transparent p-0"
-            />
-          </label>
-          <label className="flex h-10 shrink-0 items-center gap-2 rounded-xl border border-[#dedbd2] bg-white px-3">
-            <Icon size={18}>line_weight</Icon>
-            <input
-              type="range"
-              min="1"
-              max="12"
-              value={width}
-              onChange={(event) => setWidth(Number(event.target.value))}
-              disabled={!canEdit}
-              className="w-20 accent-[#30312d]"
-            />
-          </label>
-        </div>
-
+    <div className="grid h-full min-h-0 grid-rows-[auto_minmax(0,1fr)] overflow-hidden rounded-2xl border border-[#dedbd2] bg-white lg:grid-cols-[minmax(220px,300px)_minmax(0,1fr)] lg:grid-rows-1">
+      <aside className="flex max-h-[44vh] min-h-0 flex-col border-b border-[#ece8dd] bg-[#fbfaf7] lg:max-h-none lg:border-b-0 lg:border-r">
         <div className="min-h-0 flex-1 space-y-3 overflow-auto p-3">
+          {drawingToolGroups.map((group) => (
+            <section key={group.id}>
+              <div className="mb-2 flex items-center gap-2 text-xs font-bold uppercase tracking-[0.08em] text-[#66675f]">
+                <Icon size={16}>{group.icon}</Icon>
+                {group.label}
+              </div>
+              <div className="grid grid-cols-5 gap-1.5 lg:grid-cols-4">
+                {group.tools.map((item) => (
+                  <button
+                    key={item.id}
+                    disabled={!canEdit && !["pan", "select"].includes(item.id)}
+                    title={item.label}
+                    onClick={() => setTool(item.id)}
+                    className={`grid h-10 min-w-0 place-items-center rounded-xl border text-[#30312d] transition ${
+                      tool === item.id
+                        ? "border-[#30312d] bg-[#30312d] text-white"
+                        : "border-[#dedbd2] bg-white hover:bg-[#f1efe9]"
+                    } disabled:cursor-not-allowed disabled:opacity-45`}
+                  >
+                    <Icon size={20}>{item.icon}</Icon>
+                  </button>
+                ))}
+              </div>
+            </section>
+          ))}
+
+          <section>
+            <div className="mb-2 flex items-center gap-2 text-xs font-bold uppercase tracking-[0.08em] text-[#66675f]">
+              <Icon size={16}>palette</Icon>
+              Style
+            </div>
+            <div className="grid grid-cols-[42px_1fr] gap-2">
+              <label className="grid h-10 place-items-center rounded-xl border border-[#dedbd2] bg-white" title="Color">
+                <input
+                  type="color"
+                  value={color}
+                  onChange={(event) => setColor(event.target.value)}
+                  disabled={!canEdit}
+                  className="h-6 w-6 border-0 bg-transparent p-0"
+                />
+              </label>
+              <label className="flex h-10 items-center gap-2 rounded-xl border border-[#dedbd2] bg-white px-3">
+                <Icon size={18}>line_weight</Icon>
+                <input
+                  type="range"
+                  min="1"
+                  max="12"
+                  value={width}
+                  onChange={(event) => setWidth(Number(event.target.value))}
+                  disabled={!canEdit}
+                  className="min-w-0 flex-1 accent-[#30312d]"
+                />
+              </label>
+            </div>
+          </section>
+
           <section>
             <div className="mb-2 flex items-center gap-2 text-xs font-bold uppercase tracking-[0.08em] text-[#66675f]">
               <Icon size={16}>functions</Icon>
@@ -862,7 +900,7 @@ function Whiteboard({ lessonId, board, onBoardChange, canEdit, profile }) {
 
       <canvas
         ref={canvasRef}
-        className="min-h-[420px] flex-1 touch-none bg-white"
+        className="h-full min-h-0 w-full min-w-0 touch-none bg-white"
         onWheel={(event) => {
           event.preventDefault();
           zoom(event.deltaY > 0 ? 0.9 : 1.1);
