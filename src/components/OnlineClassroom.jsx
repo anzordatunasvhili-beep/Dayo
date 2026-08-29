@@ -1004,33 +1004,37 @@ function Whiteboard({ lessonId, board, onBoardChange, canEdit, profile }) {
               <Icon size={16}>category</Icon>
               Objects
             </div>
-            {selectedObjectId && (
-              <button
-                type="button"
-                disabled={!canEdit}
-                onClick={deleteSelectedObject}
-                className="mb-2 flex h-10 w-full items-center justify-center gap-2 rounded-xl border border-[#d9b8ad] bg-[#fff5f1] px-3 text-xs font-bold text-[#9a4f42] disabled:opacity-40"
-              >
-                <Icon size={18}>delete</Icon>
-                Delete selected
-              </button>
-            )}
             <div className="space-y-1 text-xs font-semibold text-[#595a53]">
               {objects.length ? (
                 objects.slice(-12).map((item) => (
-                  <button
+                  <div
                     key={item.id}
-                    type="button"
-                    onClick={() => setSelectedObjectId(item.id)}
-                    className={`flex w-full items-center justify-between rounded-xl border px-3 py-2 text-left ${
+                    className={`flex w-full items-center rounded-xl border bg-white ${
                       selectedObjectId === item.id
-                        ? "border-[#30312d] bg-white text-[#30312d]"
+                        ? "border-[#30312d] text-[#30312d]"
                         : "border-[#e8e4da] bg-white"
                     }`}
                   >
-                    <span>{item.label || item.kind}</span>
-                    <span className="h-2.5 w-2.5 rounded-full" style={{ background: item.color }} />
-                  </button>
+                    <button
+                      type="button"
+                      onClick={() => setSelectedObjectId(item.id)}
+                      className="flex min-w-0 flex-1 items-center justify-between px-3 py-2 text-left"
+                    >
+                      <span className="truncate">{item.label || item.kind}</span>
+                      <span className="ml-2 h-2.5 w-2.5 shrink-0 rounded-full" style={{ background: item.color }} />
+                    </button>
+                    {selectedObjectId === item.id && (
+                      <button
+                        type="button"
+                        disabled={!canEdit}
+                        onClick={deleteSelectedObject}
+                        title="Delete selected"
+                        className="mr-1 grid h-8 w-8 shrink-0 place-items-center rounded-lg text-[#9a4f42] hover:bg-[#fff0eb] disabled:opacity-40"
+                      >
+                        <Icon size={18}>delete</Icon>
+                      </button>
+                    )}
+                  </div>
                 ))
               ) : (
                 <div className="rounded-xl border border-dashed border-[#d8d3c7] px-3 py-3 text-[#85816f]">
