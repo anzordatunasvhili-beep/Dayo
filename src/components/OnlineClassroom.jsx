@@ -56,6 +56,8 @@ const createEmptyBoard = () => ({
   view: { ...defaultBoardView },
 });
 const emptyBoard = createEmptyBoard();
+const randomBoardColors = ["#2f6651", "#365f91", "#9a4f42", "#7b5a9a", "#b07b24", "#4d7f83", "#b33f67"];
+const objectTools = ["point", "segment", "line", "circle", "rectangle"];
 
 function Icon({ children, size = 20 }) {
   return (
@@ -220,6 +222,10 @@ function newBoardId() {
   return globalThis.crypto?.randomUUID?.() || `${Date.now()}-${Math.random().toString(16).slice(2)}`;
 }
 
+function randomBoardColor() {
+  return randomBoardColors[Math.floor(Math.random() * randomBoardColors.length)];
+}
+
 function parseExpression(raw) {
   const input = raw.trim();
   if (!input) return null;
@@ -279,6 +285,9 @@ function Whiteboard({ lessonId, board, onBoardChange, canEdit, profile }) {
   const lastViewRef = useRef(null);
   const [tool, setTool] = useState("select");
   const [color, setColor] = useState("#2f6651");
+  const [randomColor, setRandomColor] = useState(false);
+  const [snapSize, setSnapSize] = useState("1");
+  const [selectedObjectId, setSelectedObjectId] = useState(null);
   const [width, setWidth] = useState(3);
   const [expression, setExpression] = useState("");
   const [history, setHistory] = useState([]);
@@ -335,6 +344,13 @@ function Whiteboard({ lessonId, board, onBoardChange, canEdit, profile }) {
     return [1, 2, 5, 10].find((item) => item * power >= raw) * power;
   };
 
+  const activeSnapStep = () => {
+    const step = Number(snapSize);
+    return Number.isFinite(step) && step > 0 ? step : graphStep();
+  };
+
+  const creationColor = () => (randomColor ? randomBoardColor() : color);
+
   const objectAnchorPoints = () =>
     objects.flatMap((item) => {
       if (item.kind === "point") return [item.point];
@@ -354,11 +370,74 @@ function Whiteboard({ lessonId, board, onBoardChange, canEdit, profile }) {
       );
       if (nearest.point) return [...nearest.point];
     }
-    const step = graphStep();
+    const step = activeSnapStep();
     return [
       Number((Math.round(raw[0] / step) * step).toPrecision(10)),
       Number((Math.round(raw[1] / step) * step).toPrecision(10)),
     ];
+  };
+
+  const objectScreenBounds = (item) => {
+    if (item.kind === "point") {
+      const [x, y] = toScreen(item.point);
+      return { left: x - 12, right: x + 12, top: y - 12, bottom: y + 12 };
+    }
+    const [aX, aY] = toScreen(item.a);
+    const [bX, bY] = toScreen(item.b);
+    if (item.kind === "circle") {
+      const radius = Math.hypot(bX - aX, bY - aY);
+      return { left: aX - radius, right: aX + radius, top: aY - radius, bottom: aY + radius };
+    }
+    const pad = item.kind === "line" ? 18 : 10;
+    return {
+      left: Math.min(aX, bX) - pad,
+      right: Math.max(aX, bX) + pad,
+      top: Math.min(aY, bY) - pad,
+      bottom: Math.max(aY, bY) + pad,
+    };
+  };
+
+  const screenDistanceToSegment = (point, a, b) => {
+    const dx = b[0] - a[0];
+    const dy = b[1] - a[1];
+    const lengthSq = dx * dx + dy * dy;
+    if (!lengthSq) return Math.hypot(point[0] - a[0], point[1] - a[1]);
+    const t = Math.max(0, Math.min(1, ((point[0] - a[0]) * dx + (point[1] - a[1]) * dy) / lengthSq));
+    return Math.hypot(point[0] - (a[0] + dx * t), point[1] - (a[1] + dy * t));
+  };
+
+  const hitTestObject = (screen) => {
+    const tolerance = 12;
+    return [...objects].reverse().find((item) => {
+      if (item.kind === "point") {
+        const point = toScreen(item.point);
+        return Math.hypot(point[0] - screen[0], point[1] - screen[1]) <= tolerance;
+      }
+      const a = toScreen(item.a);
+      const b = toScreen(item.b);
+      if (item.kind === "circle") {
+        const radius = Math.hypot(b[0] - a[0], b[1] - a[1]);
+        const distance = Math.hypot(screen[0] - a[0], screen[1] - a[1]);
+        return Math.abs(distance - radius) <= tolerance || distance <= tolerance;
+      }
+      if (item.kind === "rectangle") {
+        const bounds = objectScreenBounds(item);
+        const inside =
+          screen[0] >= bounds.left &&
+          screen[0] <= bounds.right &&
+          screen[1] >= bounds.top &&
+          screen[1] <= bounds.bottom;
+        const edge =
+          Math.min(
+            Math.abs(screen[0] - bounds.left),
+            Math.abs(screen[0] - bounds.right),
+            Math.abs(screen[1] - bounds.top),
+            Math.abs(screen[1] - bounds.bottom),
+          ) <= tolerance;
+        return inside && edge;
+      }
+      return screenDistanceToSegment(screen, a, b) <= tolerance;
+    });
   };
 
   const drawGrid = (context) => {
@@ -544,6 +623,23 @@ function Whiteboard({ lessonId, board, onBoardChange, canEdit, profile }) {
     context.stroke();
   };
 
+  const drawSelection = (context) => {
+    const selected = objects.find((item) => item.id === selectedObjectId);
+    if (!selected) return;
+    const bounds = objectScreenBounds(selected);
+    context.save();
+    context.strokeStyle = "#30312d";
+    context.lineWidth = 1.5;
+    context.setLineDash([5, 5]);
+    context.strokeRect(
+      bounds.left - 8,
+      bounds.top - 8,
+      bounds.right - bounds.left + 16,
+      bounds.bottom - bounds.top + 16,
+    );
+    context.restore();
+  };
+
   const redraw = (draft = null, nextGraph = graph) => {
     const canvas = canvasRef.current;
     if (!canvas) return;
@@ -559,6 +655,7 @@ function Whiteboard({ lessonId, board, onBoardChange, canEdit, profile }) {
     if (draft && ["segment", "line", "circle", "rectangle"].includes(draft.kind)) {
       drawObject(context, draft);
     }
+    drawSelection(context);
     drawSnapMarker(context, draft?.snap);
     drawRemoteViews(context);
   };
@@ -575,7 +672,7 @@ function Whiteboard({ lessonId, board, onBoardChange, canEdit, profile }) {
     resize();
     window.addEventListener("resize", resize);
     return () => window.removeEventListener("resize", resize);
-  }, [board, remoteViews]);
+  }, [board, remoteViews, selectedObjectId]);
 
   useEffect(() => {
     if (!supabase) return undefined;
@@ -687,7 +784,7 @@ function Whiteboard({ lessonId, board, onBoardChange, canEdit, profile }) {
         {
           id: newBoardId(),
           value: expression.trim(),
-          color,
+          color: creationColor(),
         },
       ],
     });
@@ -812,6 +909,38 @@ function Whiteboard({ lessonId, board, onBoardChange, canEdit, profile }) {
                 />
               </label>
             </div>
+            <button
+              type="button"
+              disabled={!canEdit}
+              onClick={() => setRandomColor((current) => !current)}
+              className={`mt-2 flex h-10 w-full items-center gap-2 rounded-xl border px-3 text-xs font-bold transition ${
+                randomColor
+                  ? "border-[#30312d] bg-[#30312d] text-white"
+                  : "border-[#dedbd2] bg-white text-[#30312d] hover:bg-[#f1efe9]"
+              } disabled:opacity-40`}
+            >
+              <Icon size={18}>{randomColor ? "shuffle_on" : "shuffle"}</Icon>
+              Random color
+            </button>
+          </section>
+
+          <section>
+            <div className="mb-2 flex items-center gap-2 text-xs font-bold uppercase tracking-[0.08em] text-[#66675f]">
+              <Icon size={16}>grid_on</Icon>
+              Snap
+            </div>
+            <select
+              value={snapSize}
+              onChange={(event) => setSnapSize(event.target.value)}
+              className="h-10 w-full rounded-xl border border-[#dedbd2] bg-white px-3 text-sm font-bold text-[#30312d] outline-none focus:border-[#30312d]"
+            >
+              <option value="0.1">0.1 units</option>
+              <option value="0.25">0.25 units</option>
+              <option value="0.5">0.5 units</option>
+              <option value="1">1 unit</option>
+              <option value="2">2 units</option>
+              <option value="5">5 units</option>
+            </select>
           </section>
 
           <section>
@@ -865,10 +994,19 @@ function Whiteboard({ lessonId, board, onBoardChange, canEdit, profile }) {
             <div className="space-y-1 text-xs font-semibold text-[#595a53]">
               {objects.length ? (
                 objects.slice(-12).map((item) => (
-                  <div key={item.id} className="flex items-center justify-between rounded-xl border border-[#e8e4da] bg-white px-3 py-2">
+                  <button
+                    key={item.id}
+                    type="button"
+                    onClick={() => setSelectedObjectId(item.id)}
+                    className={`flex w-full items-center justify-between rounded-xl border px-3 py-2 text-left ${
+                      selectedObjectId === item.id
+                        ? "border-[#30312d] bg-white text-[#30312d]"
+                        : "border-[#e8e4da] bg-white"
+                    }`}
+                  >
                     <span>{item.label || item.kind}</span>
                     <span className="h-2.5 w-2.5 rounded-full" style={{ background: item.color }} />
-                  </div>
+                  </button>
                 ))
               ) : (
                 <div className="rounded-xl border border-dashed border-[#d8d3c7] px-3 py-3 text-[#85816f]">
@@ -956,8 +1094,12 @@ function Whiteboard({ lessonId, board, onBoardChange, canEdit, profile }) {
             beginPan(event);
             return;
           }
-          if (!canEdit) return;
           const screen = screenPoint(event);
+          if (tool === "select") {
+            setSelectedObjectId(hitTestObject(screen)?.id || null);
+            return;
+          }
+          if (!canEdit) return;
           const world = toWorld(screen);
           if (tool === "eraser") {
             eraseAt(world);
@@ -965,28 +1107,34 @@ function Whiteboard({ lessonId, board, onBoardChange, canEdit, profile }) {
           }
           if (tool === "text") {
             const text = window.prompt("Text note");
-            if (text) publish({ ...graph, notes: [...notes, { id: newBoardId(), kind: "text", text, point: world, color, width }] });
+            if (text) publish({ ...graph, notes: [...notes, { id: newBoardId(), kind: "text", text, point: world, color: creationColor(), width }] });
             return;
           }
           if (tool === "point") {
             const snapped = snapWorldPoint(screen, { preferObjects: false });
+            const item = {
+              id: newBoardId(),
+              kind: "point",
+              point: snapped,
+              color: creationColor(),
+              label: `P${objects.length + 1}`,
+            };
             publish({
               ...graph,
-              objects: [
-                ...objects,
-                { id: newBoardId(), kind: "point", point: snapped, color, label: `P${objects.length + 1}` },
-              ],
+              objects: [...objects, item],
             });
+            setSelectedObjectId(item.id);
+            setTool("select");
             return;
           }
-          if (["segment", "line", "circle", "rectangle"].includes(tool)) {
+          if (objectTools.includes(tool)) {
             const snapped = snapWorldPoint(screen);
             drawRef.current = {
               kind: tool,
               a: snapped,
               b: snapped,
               snap: snapped,
-              color,
+              color: creationColor(),
               id: newBoardId(),
               label: tool,
             };
@@ -994,7 +1142,7 @@ function Whiteboard({ lessonId, board, onBoardChange, canEdit, profile }) {
             return;
           }
           if (tool === "pen") {
-            drawRef.current = { id: newBoardId(), kind: "path", points: [world], color, width };
+            drawRef.current = { id: newBoardId(), kind: "path", points: [world], color: creationColor(), width };
             canvasRef.current.setPointerCapture(event.pointerId);
           }
         }}
@@ -1028,7 +1176,11 @@ function Whiteboard({ lessonId, board, onBoardChange, canEdit, profile }) {
           }
           delete draft.snap;
           const distance = Math.hypot(draft.a[0] - draft.b[0], draft.a[1] - draft.b[1]);
-          if (distance > 0.02) publish({ ...graph, objects: [...objects, draft] });
+          if (distance > 0.02) {
+            publish({ ...graph, objects: [...objects, draft] });
+            setSelectedObjectId(draft.id);
+            setTool("select");
+          }
         }}
         onAuxClick={(event) => event.preventDefault()}
       />
