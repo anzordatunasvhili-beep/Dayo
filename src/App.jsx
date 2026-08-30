@@ -20,6 +20,8 @@ import {
   resetStudentPassword,
   updateRedZone,
   deleteRedZone,
+  getHomeworkAttachmentUrl,
+  submitLessonHomework,
   setStudentSubjectPrice,
   setLessonStudentRecord,
 } from "./lib/api";
@@ -1726,7 +1728,123 @@ function GroupEditor({ group, subjects, students, onClose, onSave }) {
   );
 }
 
-function StudentDashboard({ data, setPage }) {
+function formatFileSize(size) {
+  if (!size) return "0 B";
+  if (size < 1024) return `${size} B`;
+  if (size < 1024 * 1024) return `${(size / 1024).toFixed(1)} KB`;
+  return `${(size / 1024 / 1024).toFixed(1)} MB`;
+}
+
+function HomeworkSubmissionBox({ lesson, onSubmit }) {
+  const existing = lesson.homework_submissions?.[0];
+  const [description, setDescription] = useState(existing?.description || "");
+  const [files, setFiles] = useState([]);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState("");
+
+  useEffect(() => {
+    setDescription(existing?.description || "");
+    setFiles([]);
+  }, [existing?.id, existing?.description]);
+
+  const attachments = existing?.attachments || [];
+  const submit = async (event) => {
+    event.preventDefault();
+    setSaving(true);
+    setError("");
+    try {
+      await onSubmit(lesson.id, { description, files });
+      setFiles([]);
+    } catch (submitError) {
+      setError(submitError.message);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const download = async (attachment) => {
+    try {
+      setError("");
+      const url = await getHomeworkAttachmentUrl(attachment.path);
+      window.open(url, "_blank", "noopener,noreferrer");
+    } catch (downloadError) {
+      setError(downloadError.message);
+    }
+  };
+
+  return (
+    <form onSubmit={submit} className="mt-3 rounded-2xl border border-[#ebe7dc] bg-[#fbfaf7] p-3">
+      <div className="mb-2 flex items-center justify-between gap-3">
+        <div className="flex items-center gap-2 text-xs font-bold text-[#30312d]">
+          <Icon size={17}>assignment</Icon>
+          Homework
+        </div>
+        {existing && (
+          <span className="rounded-full bg-[#e2ebe5] px-2 py-1 text-[10px] font-bold text-[#52735d]">
+            Submitted
+          </span>
+        )}
+      </div>
+      <textarea
+        value={description}
+        onChange={(event) => setDescription(event.target.value)}
+        rows={2}
+        maxLength={1200}
+        placeholder="Brief description, notes, links, or questions..."
+        className="w-full resize-none rounded-xl border border-[#dedbd2] bg-white px-3 py-2 text-sm outline-none focus:border-[#30312d]"
+      />
+      <div className="mt-2 grid gap-2 sm:grid-cols-2">
+        <label className="flex min-h-11 cursor-pointer items-center justify-center gap-2 rounded-xl border border-dashed border-[#c9c4b8] bg-white px-3 text-xs font-bold text-[#30312d]">
+          <Icon size={18}>attach_file</Icon>
+          {files.length ? `${files.length} file${files.length === 1 ? "" : "s"} selected` : "Attach files"}
+          <input
+            type="file"
+            multiple
+            onChange={(event) => setFiles([...event.target.files])}
+            className="hidden"
+          />
+        </label>
+        <label className="flex min-h-11 cursor-pointer items-center justify-center gap-2 rounded-xl border border-dashed border-[#c9c4b8] bg-white px-3 text-xs font-bold text-[#30312d]">
+          <Icon size={18}>drive_folder_upload</Icon>
+          Attach folder
+          <input
+            type="file"
+            multiple
+            webkitdirectory=""
+            directory=""
+            onChange={(event) => setFiles([...event.target.files])}
+            className="hidden"
+          />
+        </label>
+      </div>
+      {attachments.length > 0 && (
+        <div className="mt-2 space-y-1">
+          {attachments.map((attachment) => (
+            <button
+              key={attachment.path}
+              type="button"
+              onClick={() => download(attachment)}
+              className="flex w-full items-center gap-2 rounded-xl bg-white px-3 py-2 text-left text-xs font-semibold text-[#595a53]"
+            >
+              <Icon size={17}>description</Icon>
+              <span className="min-w-0 flex-1 truncate">{attachment.relative_path || attachment.name}</span>
+              <span className="shrink-0 text-[#999a92]">{formatFileSize(attachment.size)}</span>
+            </button>
+          ))}
+        </div>
+      )}
+      {error && <p className="mt-2 text-xs font-semibold text-[#a35645]">{error}</p>}
+      <button
+        disabled={saving || (!description.trim() && files.length === 0)}
+        className="mt-3 h-10 w-full rounded-xl border-0 bg-[#30312d] text-xs font-bold text-white disabled:opacity-45"
+      >
+        {saving ? "Uploading..." : existing ? "Update homework" : "Submit homework"}
+      </button>
+    </form>
+  );
+}
+
+function StudentDashboard({ data, setPage, onHomeworkSubmit }) {
   const now = new Date();
   const current = data.lessons.find(
     (lesson) =>
@@ -1738,6 +1856,9 @@ function StudentDashboard({ data, setPage }) {
     )
     .slice(0, current ? 3 : 4);
   const visibleLessons = current ? [current, ...upcoming] : upcoming;
+  const homeworkLessons = [...data.lessons]
+    .sort((a, b) => new Date(b.starts_at) - new Date(a.starts_at))
+    .slice(0, 12);
   const due = data.payments
     .filter((payment) => payment.status !== "paid")
     .reduce((sum, payment) => sum + Number(payment.amount), 0);
@@ -1785,42 +1906,80 @@ function StudentDashboard({ data, setPage }) {
           visibleLessons.map((lesson) => (
             <div
               key={lesson.id}
-              className="flex items-center gap-4 py-4 border-t border-[#efede8]"
+              className="border-t border-[#efede8] py-4"
             >
-              <div className="w-10 h-10 rounded-xl bg-[#e2ebe5] grid place-items-center">
-                <Icon>{lesson.subject?.icon || "event"}</Icon>
+              <div className="flex items-center gap-4">
+                <div className="w-10 h-10 rounded-xl bg-[#e2ebe5] grid place-items-center">
+                  <Icon>{lesson.subject?.icon || "event"}</Icon>
+                </div>
+                <div className="flex-1">
+                  <p className="text-sm font-semibold">
+                    {lesson.id === current?.id && (
+                      <span className="mr-2 rounded-full bg-[#f3e3de] px-2 py-0.5 text-[9px] font-bold text-[#a35645]">
+                        LIVE NOW
+                      </span>
+                    )}
+                    {lesson.subject?.name || "Lesson"}
+                  </p>
+                  <p className="text-xs text-[#999] mt-1">
+                    {new Date(lesson.starts_at).toLocaleString([], {
+                      weekday: "short",
+                      month: "short",
+                      day: "numeric",
+                      hour: "2-digit",
+                      minute: "2-digit",
+                    })}
+                  </p>
+                </div>
+                <button
+                  onClick={() => setPage(`classroom:${lesson.id}`)}
+                  title={lesson.id === current?.id ? "Join current class" : "Join lesson"}
+                  aria-label={lesson.id === current?.id ? "Join current class" : "Join lesson"}
+                  className="w-9 h-9 grid place-items-center rounded-lg bg-[#f1efe9]"
+                >
+                  <Icon size={17}>videocam</Icon>
+                </button>
               </div>
-              <div className="flex-1">
-                <p className="text-sm font-semibold">
-                  {lesson.id === current?.id && (
-                    <span className="mr-2 rounded-full bg-[#f3e3de] px-2 py-0.5 text-[9px] font-bold text-[#a35645]">
-                      LIVE NOW
-                    </span>
-                  )}
-                  {lesson.subject?.name || "Lesson"}
-                </p>
-                <p className="text-xs text-[#999] mt-1">
-                  {new Date(lesson.starts_at).toLocaleString([], {
-                    weekday: "short",
-                    month: "short",
-                    day: "numeric",
-                    hour: "2-digit",
-                    minute: "2-digit",
-                  })}
-                </p>
-              </div>
-              <button
-                onClick={() => setPage(`classroom:${lesson.id}`)}
-                title={lesson.id === current?.id ? "Join current class" : "Join lesson"}
-                aria-label={lesson.id === current?.id ? "Join current class" : "Join lesson"}
-                className="w-9 h-9 grid place-items-center rounded-lg bg-[#f1efe9]"
-              >
-                <Icon size={17}>videocam</Icon>
-              </button>
             </div>
           ))
         ) : (
           <Empty text="No upcoming lessons." />
+        )}
+      </div>
+      <div className="mt-5 bg-white border border-[#e7e4dd] rounded-[24px] p-6">
+        <div className="mb-4">
+          <h2 className="font-semibold">Homework submissions</h2>
+          <p className="text-xs text-[#999] mt-1">
+            Upload files, folders, notes, links or corrections for each lesson
+          </p>
+        </div>
+        {homeworkLessons.length ? (
+          <div className="grid gap-3 lg:grid-cols-2">
+            {homeworkLessons.map((lesson) => (
+              <div key={lesson.id} className="rounded-2xl border border-[#efede8] p-4">
+                <div className="mb-3 flex items-center gap-3">
+                  <div className="grid h-9 w-9 place-items-center rounded-xl bg-[#e2ebe5]">
+                    <Icon size={18}>{lesson.subject?.icon || "event"}</Icon>
+                  </div>
+                  <div className="min-w-0 flex-1">
+                    <p className="truncate text-sm font-semibold">{lesson.subject?.name || "Lesson"}</p>
+                    <p className="mt-0.5 text-xs text-[#999]">
+                      {new Date(lesson.starts_at).toLocaleString([], {
+                        weekday: "short",
+                        month: "short",
+                        day: "numeric",
+                        hour: "2-digit",
+                        minute: "2-digit",
+                      })}
+                    </p>
+                  </div>
+                </div>
+                <HomeworkSubmissionBox lesson={lesson} onSubmit={onHomeworkSubmit} />
+              </div>
+            ))}
+          </div>
+        ) : (
+          <Empty text="No lessons for homework yet." />
         )}
       </div>
     </div>
@@ -2214,7 +2373,15 @@ export default function App() {
     ),
   };
   const studentContent = {
-    dashboard: <StudentDashboard data={data} setPage={navigate} />,
+    dashboard: (
+      <StudentDashboard
+        data={data}
+        setPage={navigate}
+        onHomeworkSubmit={(lessonId, values) =>
+          act(() => submitLessonHomework(lessonId, values), "Homework submitted")
+        }
+      />
+    ),
     schedule: (
       <EditableSchedule
         lessons={data.lessons}

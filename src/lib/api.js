@@ -41,8 +41,10 @@ export async function getWorkspace() {
     .single();
   if (profile.error) throw profile.error;
   const teacher = profile.data.role === "teacher";
-  const lessonSelect =
+  const lessonSelectBase =
     "*, subject:subjects!lessons_subject_id_fkey(name,icon), student:profiles!lessons_student_id_fkey(first_name,last_name), group:groups!lessons_group_id_fkey(name), student_audiences:lesson_students!lesson_students_lesson_id_fkey(student_id,student:profiles!lesson_students_student_id_fkey(first_name,last_name)), group_audiences:lesson_groups!lesson_groups_lesson_id_fkey(group_id,group:groups!lesson_groups_group_id_fkey(name)), records:lesson_student_records(student_id,attendance,homework,homework_note,price_snapshot,currency,billable,paid)";
+  const lessonSelect =
+    `${lessonSelectBase}, homework_submissions:lesson_homework_submissions(id,student_id,description,attachments,submitted_at,updated_at,student:profiles!lesson_homework_submissions_student_id_fkey(first_name,last_name))`;
   const paymentSelect =
     "*, student:profiles!payments_student_id_fkey(first_name,last_name)";
   const empty = Promise.resolve({ data: [], error: null });
@@ -115,6 +117,20 @@ export async function getWorkspace() {
             .select("*,subject:subjects(name)")
             .eq("student_id", user.id),
     ]);
+  if (lessons.error && /lesson_homework_submissions|schema cache|relationship/i.test(lessons.error.message)) {
+    const fallbackLessons = teacher
+      ? await db
+          .from("lessons")
+          .select(lessonSelectBase)
+          .eq("teacher_id", user.id)
+          .order("starts_at")
+      : await db.from("lessons").select(lessonSelectBase).order("starts_at");
+    lessons.data = (fallbackLessons.data || []).map((lesson) => ({
+      ...lesson,
+      homework_submissions: [],
+    }));
+    lessons.error = fallbackLessons.error;
+  }
   for (const result of [
     students,
     subjects,
@@ -242,6 +258,76 @@ export async function sendChatMessage(lessonId, body) {
     body,
   });
   if (error) throw error;
+}
+
+function safePathPart(value) {
+  return String(value || "file")
+    .replace(/\\/g, "/")
+    .split("/")
+    .filter(Boolean)
+    .map((part) => part.replace(/[^a-zA-Z0-9._ -]/g, "_").trim() || "file")
+    .join("/");
+}
+
+export async function submitLessonHomework(lessonId, { description = "", files = [] }) {
+  const db = requireClient();
+  const {
+    data: { user },
+  } = await db.auth.getUser();
+  if (!user) throw new Error("You are not signed in.");
+
+  const { data: submission, error: submissionError } = await db
+    .from("lesson_homework_submissions")
+    .upsert(
+      {
+        lesson_id: lessonId,
+        student_id: user.id,
+        description: description.trim(),
+        updated_at: new Date().toISOString(),
+      },
+      { onConflict: "lesson_id,student_id" },
+    )
+    .select()
+    .single();
+  if (submissionError) throw submissionError;
+
+  const uploaded = [];
+  for (const file of files) {
+    const relativeName = safePathPart(file.webkitRelativePath || file.name);
+    const path = `${lessonId}/${user.id}/${submission.id}/${relativeName}`;
+    const { error: uploadError } = await db.storage
+      .from("homework-submissions")
+      .upload(path, file, { upsert: true, contentType: file.type || undefined });
+    if (uploadError) throw uploadError;
+    uploaded.push({
+      path,
+      name: file.name,
+      relative_path: relativeName,
+      size: file.size,
+      type: file.type || "application/octet-stream",
+    });
+  }
+
+  const attachments = files.length ? uploaded : submission.attachments || [];
+  const { error: updateError } = await db
+    .from("lesson_homework_submissions")
+    .update({
+      description: description.trim(),
+      attachments,
+      submitted_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    })
+    .eq("id", submission.id);
+  if (updateError) throw updateError;
+}
+
+export async function getHomeworkAttachmentUrl(path) {
+  const { data, error } = await requireClient()
+    .storage
+    .from("homework-submissions")
+    .createSignedUrl(path, 60);
+  if (error) throw error;
+  return data.signedUrl;
 }
 
 export async function createLesson(input) {
