@@ -1996,6 +1996,9 @@ function StudentDashboard({ data, setPage, onHomeworkSubmit }) {
                   <Icon size={17}>videocam</Icon>
                 </button>
               </div>
+              <div className="ml-14 mt-3">
+                <HomeworkAssignmentBox lesson={lesson} />
+              </div>
             </div>
           ))
         ) : (
