@@ -46,9 +46,9 @@ export async function getWorkspace() {
   const lessonSelectBase =
     "*, subject:subjects!lessons_subject_id_fkey(name,icon), student:profiles!lessons_student_id_fkey(first_name,last_name), group:groups!lessons_group_id_fkey(name), student_audiences:lesson_students!lesson_students_lesson_id_fkey(student_id,student:profiles!lesson_students_student_id_fkey(first_name,last_name)), group_audiences:lesson_groups!lesson_groups_lesson_id_fkey(group_id,group:groups!lesson_groups_group_id_fkey(name)), records:lesson_student_records(student_id,attendance,homework,homework_note,homework_score,price_snapshot,currency,billable,paid)";
   const lessonSelect =
-    `${lessonSelectBase}, homework_assignment:lesson_homework_assignments(id,description,attachments,assigned_at,updated_at), homework_submissions:lesson_homework_submissions(id,student_id,description,attachments,submitted_at,updated_at,student:profiles!lesson_homework_submissions_student_id_fkey(first_name,last_name))`;
+    `${lessonSelectBase}, homework_submissions:lesson_homework_submissions(id,student_id,description,attachments,submitted_at,updated_at,student:profiles!lesson_homework_submissions_student_id_fkey(first_name,last_name))`;
   const lessonSelectLegacy =
-    `${lessonSelectBaseLegacy}, homework_assignment:lesson_homework_assignments(id,description,attachments,assigned_at,updated_at), homework_submissions:lesson_homework_submissions(id,student_id,description,attachments,submitted_at,updated_at,student:profiles!lesson_homework_submissions_student_id_fkey(first_name,last_name))`;
+    `${lessonSelectBaseLegacy}, homework_submissions:lesson_homework_submissions(id,student_id,description,attachments,submitted_at,updated_at,student:profiles!lesson_homework_submissions_student_id_fkey(first_name,last_name))`;
   const paymentSelect =
     "*, student:profiles!payments_student_id_fkey(first_name,last_name)";
   const empty = Promise.resolve({ data: [], error: null });
@@ -132,7 +132,7 @@ export async function getWorkspace() {
     lessons.data = legacyLessons.data;
     lessons.error = legacyLessons.error;
   }
-  if (lessons.error && /lesson_homework_assignments|lesson_homework_submissions|schema cache|relationship/i.test(lessons.error.message)) {
+  if (lessons.error && /lesson_homework_submissions|schema cache|relationship/i.test(lessons.error.message)) {
     const fallbackLessons = teacher
       ? await db
           .from("lessons")
@@ -142,7 +142,6 @@ export async function getWorkspace() {
       : await db.from("lessons").select(lessonSelectBaseLegacy).order("starts_at");
     lessons.data = (fallbackLessons.data || []).map((lesson) => ({
       ...lesson,
-      homework_assignment: [],
       homework_submissions: [],
     }));
     lessons.error = fallbackLessons.error;
@@ -157,13 +156,21 @@ export async function getWorkspace() {
     prices,
   ])
     if (result.error) throw result.error;
+  const homeworkAssignments = await db
+    .from("lesson_homework_assignments")
+    .select("id,lesson_id,description,attachments,assigned_at,updated_at")
+    .order("updated_at", { ascending: false });
+  if (homeworkAssignments.error) throw homeworkAssignments.error;
+  const assignmentsByLesson = new Map();
+  for (const assignment of homeworkAssignments.data || []) {
+    if (!assignmentsByLesson.has(assignment.lesson_id)) {
+      assignmentsByLesson.set(assignment.lesson_id, []);
+    }
+    assignmentsByLesson.get(assignment.lesson_id).push(assignment);
+  }
   lessons.data = (lessons.data || []).map((lesson) => ({
     ...lesson,
-    homework_assignment: Array.isArray(lesson.homework_assignment)
-      ? lesson.homework_assignment
-      : lesson.homework_assignment
-        ? [lesson.homework_assignment]
-        : [],
+    homework_assignment: assignmentsByLesson.get(lesson.id) || [],
     homework_submissions: lesson.homework_submissions || [],
   }));
   return {
