@@ -41,10 +41,14 @@ export async function getWorkspace() {
     .single();
   if (profile.error) throw profile.error;
   const teacher = profile.data.role === "teacher";
-  const lessonSelectBase =
+  const lessonSelectBaseLegacy =
     "*, subject:subjects!lessons_subject_id_fkey(name,icon), student:profiles!lessons_student_id_fkey(first_name,last_name), group:groups!lessons_group_id_fkey(name), student_audiences:lesson_students!lesson_students_lesson_id_fkey(student_id,student:profiles!lesson_students_student_id_fkey(first_name,last_name)), group_audiences:lesson_groups!lesson_groups_lesson_id_fkey(group_id,group:groups!lesson_groups_group_id_fkey(name)), records:lesson_student_records(student_id,attendance,homework,homework_note,price_snapshot,currency,billable,paid)";
+  const lessonSelectBase =
+    "*, subject:subjects!lessons_subject_id_fkey(name,icon), student:profiles!lessons_student_id_fkey(first_name,last_name), group:groups!lessons_group_id_fkey(name), student_audiences:lesson_students!lesson_students_lesson_id_fkey(student_id,student:profiles!lesson_students_student_id_fkey(first_name,last_name)), group_audiences:lesson_groups!lesson_groups_lesson_id_fkey(group_id,group:groups!lesson_groups_group_id_fkey(name)), records:lesson_student_records(student_id,attendance,homework,homework_note,homework_score,price_snapshot,currency,billable,paid)";
   const lessonSelect =
     `${lessonSelectBase}, homework_assignment:lesson_homework_assignments(id,description,attachments,assigned_at,updated_at), homework_submissions:lesson_homework_submissions(id,student_id,description,attachments,submitted_at,updated_at,student:profiles!lesson_homework_submissions_student_id_fkey(first_name,last_name))`;
+  const lessonSelectLegacy =
+    `${lessonSelectBaseLegacy}, homework_assignment:lesson_homework_assignments(id,description,attachments,assigned_at,updated_at), homework_submissions:lesson_homework_submissions(id,student_id,description,attachments,submitted_at,updated_at,student:profiles!lesson_homework_submissions_student_id_fkey(first_name,last_name))`;
   const paymentSelect =
     "*, student:profiles!payments_student_id_fkey(first_name,last_name)";
   const empty = Promise.resolve({ data: [], error: null });
@@ -117,14 +121,25 @@ export async function getWorkspace() {
             .select("*,subject:subjects(name)")
             .eq("student_id", user.id),
     ]);
+  if (lessons.error && /homework_score|column/i.test(lessons.error.message)) {
+    const legacyLessons = teacher
+      ? await db
+          .from("lessons")
+          .select(lessonSelectLegacy)
+          .eq("teacher_id", user.id)
+          .order("starts_at")
+      : await db.from("lessons").select(lessonSelectLegacy).order("starts_at");
+    lessons.data = legacyLessons.data;
+    lessons.error = legacyLessons.error;
+  }
   if (lessons.error && /lesson_homework_assignments|lesson_homework_submissions|schema cache|relationship/i.test(lessons.error.message)) {
     const fallbackLessons = teacher
       ? await db
           .from("lessons")
-          .select(lessonSelectBase)
+          .select(lessonSelectBaseLegacy)
           .eq("teacher_id", user.id)
           .order("starts_at")
-      : await db.from("lessons").select(lessonSelectBase).order("starts_at");
+      : await db.from("lessons").select(lessonSelectBaseLegacy).order("starts_at");
     lessons.data = (fallbackLessons.data || []).map((lesson) => ({
       ...lesson,
       homework_assignment: [],
@@ -674,11 +689,15 @@ export async function setStudentSubjectPrice(input) {
 
 export async function setLessonStudentRecord(input) {
   const db = requireClient();
+  const recordInput = {
+    ...input,
+    homework_score: input.homework_score === "" ? null : input.homework_score,
+  };
   const { data: existing } = await db
     .from("lesson_student_records")
     .select("price_snapshot,currency")
-    .eq("lesson_id", input.lesson_id)
-    .eq("student_id", input.student_id)
+    .eq("lesson_id", recordInput.lesson_id)
+    .eq("student_id", recordInput.student_id)
     .maybeSingle();
   let snapshot = {};
   if (existing?.price_snapshot != null)
@@ -686,17 +705,17 @@ export async function setLessonStudentRecord(input) {
       price_snapshot: existing.price_snapshot,
       currency: existing.currency,
     };
-  else if (input.billable) {
+  else if (recordInput.billable) {
     const { data: lesson } = await db
       .from("lessons")
       .select("subject_id")
-      .eq("id", input.lesson_id)
+      .eq("id", recordInput.lesson_id)
       .single();
     if (lesson?.subject_id) {
       const { data: rate } = await db
         .from("student_subject_prices")
         .select("price,currency")
-        .eq("student_id", input.student_id)
+        .eq("student_id", recordInput.student_id)
         .eq("subject_id", lesson.subject_id)
         .maybeSingle();
       if (rate)
@@ -706,7 +725,7 @@ export async function setLessonStudentRecord(input) {
   const { error } = await db
     .from("lesson_student_records")
     .upsert(
-      { ...input, ...snapshot, updated_at: new Date().toISOString() },
+      { ...recordInput, ...snapshot, updated_at: new Date().toISOString() },
       { onConflict: "lesson_id,student_id" },
     );
   if (error) throw error;

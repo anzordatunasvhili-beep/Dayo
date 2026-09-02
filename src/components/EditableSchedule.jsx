@@ -859,8 +859,7 @@ function HomeworkAssignmentEditor({ lesson, onSave, onDownload }) {
 
   if (!onSave) return null;
   const attachments = assignment?.attachments || [];
-  const submit = async (event) => {
-    event.preventDefault();
+  const submit = async () => {
     setSaving(true);
     setError("");
     try {
@@ -883,7 +882,7 @@ function HomeworkAssignmentEditor({ lesson, onSave, onDownload }) {
   };
 
   return (
-    <form onSubmit={submit} className="mb-5 rounded-2xl border border-[#dedbd3] bg-white p-4">
+    <div className="mb-5 rounded-2xl border border-[#dedbd3] bg-white p-4">
       <div className="mb-3 flex items-center justify-between gap-3">
         <div>
           <p className="text-xs font-semibold">Homework assignment</p>
@@ -918,6 +917,8 @@ function HomeworkAssignmentEditor({ lesson, onSave, onDownload }) {
           />
         </label>
         <button
+          type="button"
+          onClick={submit}
           disabled={saving || (!description.trim() && files.length === 0)}
           className="min-h-10 rounded-xl border-0 bg-[#30312d] px-4 text-xs font-bold text-white disabled:opacity-45"
         >
@@ -941,7 +942,7 @@ function HomeworkAssignmentEditor({ lesson, onSave, onDownload }) {
         </div>
       )}
       {error && <p className="mt-2 text-xs font-semibold text-[#a35645]">{error}</p>}
-    </form>
+    </div>
   );
 }
 
@@ -970,6 +971,7 @@ function TrackingPanel({ lesson, students, groups, onTrack }) {
           attendance: saved?.attendance || "unknown",
           homework: saved?.homework || "none",
           homework_note: saved?.homework_note || "",
+          homework_score: saved?.homework_score ?? "",
           billable: saved?.billable ?? true,
           paid: saved?.paid ?? false,
         },
@@ -1061,6 +1063,33 @@ function TrackingPanel({ lesson, students, groups, onTrack }) {
                   student.id,
                   "homework_note",
                   records[student.id].homework_note,
+                )
+              }
+            />
+            <input
+              type="number"
+              min="0"
+              max="100"
+              step="1"
+              className="mt-2 w-full h-9 rounded-lg border border-[#ddd] bg-white px-2 text-xs"
+              placeholder="Homework score out of 100"
+              value={records[student.id].homework_score}
+              onChange={(e) =>
+                setRecords({
+                  ...records,
+                  [student.id]: {
+                    ...records[student.id],
+                    homework_score: e.target.value,
+                  },
+                })
+              }
+              onBlur={() =>
+                change(
+                  student.id,
+                  "homework_score",
+                  records[student.id].homework_score === ""
+                    ? null
+                    : Number(records[student.id].homework_score),
                 )
               }
             />

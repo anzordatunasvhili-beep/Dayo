@@ -1737,6 +1737,24 @@ function formatFileSize(size) {
   return `${(size / 1024 / 1024).toFixed(1)} MB`;
 }
 
+const homeworkStatusStyles = {
+  none: { label: "No homework", className: "bg-[#f1efe9] text-[#77786f]" },
+  assigned: { label: "Assigned", className: "bg-[#e8edf7] text-[#4d6285]" },
+  submitted: { label: "Submitted", className: "bg-[#eee4d5] text-[#8a642e]" },
+  completed: { label: "Corrected", className: "bg-[#e2ebe5] text-[#52735d]" },
+  missing: { label: "Missing", className: "bg-[#f3e3de] text-[#a35645]" },
+};
+
+function homeworkStatusForLesson(lesson) {
+  const record = lesson.records?.[0];
+  const status = record?.homework || (lesson.homework_assignment?.length ? "assigned" : "none");
+  return {
+    record,
+    status,
+    ...(homeworkStatusStyles[status] || homeworkStatusStyles.none),
+  };
+}
+
 function HomeworkSubmissionBox({ lesson, onSubmit }) {
   const existing = lesson.homework_submissions?.[0];
   const [description, setDescription] = useState(existing?.description || "");
@@ -1848,8 +1866,10 @@ function HomeworkSubmissionBox({ lesson, onSubmit }) {
 
 function HomeworkAssignmentBox({ lesson }) {
   const assignment = lesson.homework_assignment?.[0];
+  const homeworkStatus = homeworkStatusForLesson(lesson);
+  const [open, setOpen] = useState(false);
   const [error, setError] = useState("");
-  if (!assignment?.description && !assignment?.attachments?.length) return null;
+  const hasAssignment = Boolean(assignment?.description || assignment?.attachments?.length);
 
   const download = async (attachment) => {
     try {
@@ -1863,32 +1883,70 @@ function HomeworkAssignmentBox({ lesson }) {
 
   return (
     <div className="mb-3 rounded-2xl border border-[#e1e6df] bg-[#f7faf7] p-3">
-      <div className="mb-2 flex items-center gap-2 text-xs font-bold text-[#30312d]">
-        <Icon size={17}>assignment</Icon>
-        Teacher homework
+      <div className="flex flex-wrap items-center gap-2">
+        <span className={`rounded-full px-2 py-1 text-[10px] font-bold ${homeworkStatus.className}`}>
+          {homeworkStatus.label}
+        </span>
+        {homeworkStatus.record?.homework_score != null && (
+          <span className="rounded-full bg-[#30312d] px-2 py-1 text-[10px] font-bold text-white">
+            Score {homeworkStatus.record.homework_score}/100
+          </span>
+        )}
+        {hasAssignment && (
+          <button
+            type="button"
+            onClick={() => setOpen(true)}
+            className="ml-auto flex h-8 items-center gap-1 rounded-lg border-0 bg-white px-3 text-xs font-bold text-[#30312d]"
+          >
+            <Icon size={16}>visibility</Icon>
+            See instructions
+          </button>
+        )}
       </div>
-      {assignment.description && (
-        <p className="whitespace-pre-wrap text-xs leading-5 text-[#595a53]">
-          {assignment.description}
+      {homeworkStatus.record?.homework_note && (
+        <p className="mt-2 text-xs leading-5 text-[#77786f]">
+          {homeworkStatus.record.homework_note}
         </p>
       )}
-      {assignment.attachments?.length > 0 && (
-        <div className="mt-2 space-y-1">
-          {assignment.attachments.map((attachment) => (
-            <button
-              key={attachment.path}
-              type="button"
-              onClick={() => download(attachment)}
-              className="flex w-full items-center gap-2 rounded-xl bg-white px-3 py-2 text-left text-xs font-semibold text-[#595a53]"
-            >
-              <Icon size={17}>picture_as_pdf</Icon>
-              <span className="min-w-0 flex-1 truncate">{attachment.relative_path || attachment.name}</span>
-              <span className="shrink-0 text-[#999a92]">{formatFileSize(attachment.size)}</span>
-            </button>
-          ))}
-        </div>
+      {!hasAssignment && (
+        <p className="mt-2 text-xs text-[#999]">No teacher instructions yet.</p>
       )}
       {error && <p className="mt-2 text-xs font-semibold text-[#a35645]">{error}</p>}
+      {open && (
+        <ModalShell title="Homework instructions" onClose={() => setOpen(false)}>
+          <div className="space-y-3">
+            <div className="rounded-2xl border border-[#e1e6df] bg-[#f7faf7] p-4">
+              <div className="mb-2 flex items-center gap-2 text-xs font-bold text-[#30312d]">
+                <Icon size={17}>assignment</Icon>
+                {lesson.subject?.name || "Lesson"}
+              </div>
+              {assignment.description ? (
+                <p className="whitespace-pre-wrap text-sm leading-6 text-[#595a53]">
+                  {assignment.description}
+                </p>
+              ) : (
+                <p className="text-sm text-[#999]">No written instructions.</p>
+              )}
+            </div>
+            {assignment.attachments?.length > 0 && (
+              <div className="space-y-2">
+                {assignment.attachments.map((attachment) => (
+                  <button
+                    key={attachment.path}
+                    type="button"
+                    onClick={() => download(attachment)}
+                    className="flex w-full items-center gap-2 rounded-xl border border-[#efede8] bg-white px-3 py-3 text-left text-xs font-semibold text-[#595a53]"
+                  >
+                    <Icon size={17}>picture_as_pdf</Icon>
+                    <span className="min-w-0 flex-1 truncate">{attachment.relative_path || attachment.name}</span>
+                    <span className="shrink-0 text-[#999a92]">{formatFileSize(attachment.size)}</span>
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+        </ModalShell>
+      )}
     </div>
   );
 }
