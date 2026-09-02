@@ -30,6 +30,12 @@ const timeValue = (value) =>
     hour: "2-digit",
     minute: "2-digit",
   });
+function formatFileSize(size) {
+  if (!size) return "0 B";
+  if (size < 1024) return `${size} B`;
+  if (size < 1024 * 1024) return `${(size / 1024).toFixed(1)} KB`;
+  return `${(size / 1024 / 1024).toFixed(1)} MB`;
+}
 const overlaps = (aStart, aEnd, bStart, bEnd) => aStart < bEnd && aEnd > bStart;
 const zoneOccurrence = (zone, day) => {
   const source = new Date(zone.starts_at);
@@ -87,6 +93,8 @@ export default function EditableSchedule({
   onUpdateRedZone,
   onDeleteRedZone,
   onTrack,
+  onHomeworkAssignment,
+  onHomeworkAssignmentDownload,
 }) {
   const [weekStart, setWeekStart] = useState(() => mondayOf(new Date()));
   const [editing, setEditing] = useState(null);
@@ -451,6 +459,8 @@ export default function EditableSchedule({
               : null
           }
           onTrack={onTrack}
+          onHomeworkAssignment={onHomeworkAssignment}
+          onHomeworkAssignmentDownload={onHomeworkAssignmentDownload}
         />
       )}
       {editingZone && (
@@ -542,6 +552,8 @@ function LessonEditor({
   onSave,
   onDelete,
   onTrack,
+  onHomeworkAssignment,
+  onHomeworkAssignmentDownload,
 }) {
   const initialStudentIds =
     lesson?.student_audiences?.map((item) => item.student_id) ||
@@ -709,12 +721,19 @@ function LessonEditor({
           </Field>
         )}
         {lesson && (
-          <TrackingPanel
-            lesson={lesson}
-            students={students}
-            groups={groups}
-            onTrack={onTrack}
-          />
+          <>
+            <HomeworkAssignmentEditor
+              lesson={lesson}
+              onSave={onHomeworkAssignment}
+              onDownload={onHomeworkAssignmentDownload}
+            />
+            <TrackingPanel
+              lesson={lesson}
+              students={students}
+              groups={groups}
+              onTrack={onTrack}
+            />
+          </>
         )}
         {error && (
           <p className="mb-3 text-xs text-[#a35645] bg-[#f3e3de] rounded-xl p-3">
@@ -823,6 +842,106 @@ function AudiencePicker({
         </div>
       </div>
     </div>
+  );
+}
+
+function HomeworkAssignmentEditor({ lesson, onSave, onDownload }) {
+  const assignment = lesson.homework_assignment?.[0];
+  const [description, setDescription] = useState(assignment?.description || "");
+  const [files, setFiles] = useState([]);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState("");
+
+  useEffect(() => {
+    setDescription(assignment?.description || "");
+    setFiles([]);
+  }, [assignment?.id, assignment?.description]);
+
+  if (!onSave) return null;
+  const attachments = assignment?.attachments || [];
+  const submit = async (event) => {
+    event.preventDefault();
+    setSaving(true);
+    setError("");
+    try {
+      await onSave(lesson.id, { description, files });
+      setFiles([]);
+    } catch (saveError) {
+      setError(saveError.message);
+    } finally {
+      setSaving(false);
+    }
+  };
+  const download = async (attachment) => {
+    try {
+      setError("");
+      const url = await onDownload(attachment.path);
+      window.open(url, "_blank", "noopener,noreferrer");
+    } catch (downloadError) {
+      setError(downloadError.message);
+    }
+  };
+
+  return (
+    <form onSubmit={submit} className="mb-5 rounded-2xl border border-[#dedbd3] bg-white p-4">
+      <div className="mb-3 flex items-center justify-between gap-3">
+        <div>
+          <p className="text-xs font-semibold">Homework assignment</p>
+          <p className="mt-1 text-[10px] text-[#999]">
+            Add instructions and PDF files students can open before submitting
+          </p>
+        </div>
+        {assignment && (
+          <span className="rounded-full bg-[#e2ebe5] px-2 py-1 text-[10px] font-bold text-[#52735d]">
+            Assigned
+          </span>
+        )}
+      </div>
+      <textarea
+        value={description}
+        onChange={(event) => setDescription(event.target.value)}
+        rows={3}
+        maxLength={1200}
+        placeholder="Homework instructions, page numbers, links, or reminders..."
+        className="w-full resize-none rounded-xl border border-[#dedbd2] bg-[#fbfaf7] px-3 py-2 text-xs outline-none focus:border-[#30312d]"
+      />
+      <div className="mt-2 grid gap-2 sm:grid-cols-2">
+        <label className="flex min-h-10 cursor-pointer items-center justify-center gap-2 rounded-xl border border-dashed border-[#c9c4b8] bg-[#fbfaf7] px-3 text-xs font-bold text-[#30312d]">
+          <Icon size={17}>picture_as_pdf</Icon>
+          {files.length ? `${files.length} file${files.length === 1 ? "" : "s"} selected` : "Attach PDF or files"}
+          <input
+            type="file"
+            multiple
+            accept=".pdf,application/pdf,image/*,.doc,.docx,.ppt,.pptx,.txt"
+            onChange={(event) => setFiles([...event.target.files])}
+            className="hidden"
+          />
+        </label>
+        <button
+          disabled={saving || (!description.trim() && files.length === 0)}
+          className="min-h-10 rounded-xl border-0 bg-[#30312d] px-4 text-xs font-bold text-white disabled:opacity-45"
+        >
+          {saving ? "Uploading..." : assignment ? "Update assignment" : "Assign homework"}
+        </button>
+      </div>
+      {attachments.length > 0 && (
+        <div className="mt-2 space-y-1">
+          {attachments.map((attachment) => (
+            <button
+              key={attachment.path}
+              type="button"
+              onClick={() => download(attachment)}
+              className="flex w-full items-center gap-2 rounded-xl bg-[#fbfaf7] px-3 py-2 text-left text-xs font-semibold text-[#595a53]"
+            >
+              <Icon size={17}>description</Icon>
+              <span className="min-w-0 flex-1 truncate">{attachment.relative_path || attachment.name}</span>
+              <span className="shrink-0 text-[#999a92]">{formatFileSize(attachment.size)}</span>
+            </button>
+          ))}
+        </div>
+      )}
+      {error && <p className="mt-2 text-xs font-semibold text-[#a35645]">{error}</p>}
+    </form>
   );
 }
 

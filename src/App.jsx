@@ -20,7 +20,9 @@ import {
   resetStudentPassword,
   updateRedZone,
   deleteRedZone,
+  getHomeworkAssignmentAttachmentUrl,
   getHomeworkAttachmentUrl,
+  saveLessonHomeworkAssignment,
   submitLessonHomework,
   setStudentSubjectPrice,
   setLessonStudentRecord,
@@ -1844,6 +1846,53 @@ function HomeworkSubmissionBox({ lesson, onSubmit }) {
   );
 }
 
+function HomeworkAssignmentBox({ lesson }) {
+  const assignment = lesson.homework_assignment?.[0];
+  const [error, setError] = useState("");
+  if (!assignment?.description && !assignment?.attachments?.length) return null;
+
+  const download = async (attachment) => {
+    try {
+      setError("");
+      const url = await getHomeworkAssignmentAttachmentUrl(attachment.path);
+      window.open(url, "_blank", "noopener,noreferrer");
+    } catch (downloadError) {
+      setError(downloadError.message);
+    }
+  };
+
+  return (
+    <div className="mb-3 rounded-2xl border border-[#e1e6df] bg-[#f7faf7] p-3">
+      <div className="mb-2 flex items-center gap-2 text-xs font-bold text-[#30312d]">
+        <Icon size={17}>assignment</Icon>
+        Teacher homework
+      </div>
+      {assignment.description && (
+        <p className="whitespace-pre-wrap text-xs leading-5 text-[#595a53]">
+          {assignment.description}
+        </p>
+      )}
+      {assignment.attachments?.length > 0 && (
+        <div className="mt-2 space-y-1">
+          {assignment.attachments.map((attachment) => (
+            <button
+              key={attachment.path}
+              type="button"
+              onClick={() => download(attachment)}
+              className="flex w-full items-center gap-2 rounded-xl bg-white px-3 py-2 text-left text-xs font-semibold text-[#595a53]"
+            >
+              <Icon size={17}>picture_as_pdf</Icon>
+              <span className="min-w-0 flex-1 truncate">{attachment.relative_path || attachment.name}</span>
+              <span className="shrink-0 text-[#999a92]">{formatFileSize(attachment.size)}</span>
+            </button>
+          ))}
+        </div>
+      )}
+      {error && <p className="mt-2 text-xs font-semibold text-[#a35645]">{error}</p>}
+    </div>
+  );
+}
+
 function StudentDashboard({ data, setPage, onHomeworkSubmit }) {
   const now = new Date();
   const current = data.lessons.find(
@@ -1857,7 +1906,14 @@ function StudentDashboard({ data, setPage, onHomeworkSubmit }) {
     .slice(0, current ? 3 : 4);
   const visibleLessons = current ? [current, ...upcoming] : upcoming;
   const homeworkLessons = [...data.lessons]
-    .sort((a, b) => new Date(b.starts_at) - new Date(a.starts_at))
+    .sort((a, b) => {
+      const aFuture = new Date(a.ends_at) >= now;
+      const bFuture = new Date(b.ends_at) >= now;
+      if (aFuture !== bFuture) return aFuture ? -1 : 1;
+      return aFuture
+        ? new Date(a.starts_at) - new Date(b.starts_at)
+        : new Date(b.starts_at) - new Date(a.starts_at);
+    })
     .slice(0, 12);
   const due = data.payments
     .filter((payment) => payment.status !== "paid")
@@ -1974,6 +2030,7 @@ function StudentDashboard({ data, setPage, onHomeworkSubmit }) {
                     </p>
                   </div>
                 </div>
+                <HomeworkAssignmentBox lesson={lesson} />
                 <HomeworkSubmissionBox lesson={lesson} onSubmit={onHomeworkSubmit} />
               </div>
             ))}
@@ -2316,6 +2373,10 @@ export default function App() {
         onTrack={(values) =>
           act(() => setLessonStudentRecord(values), "Tracking updated")
         }
+        onHomeworkAssignment={(lessonId, values) =>
+          act(() => saveLessonHomeworkAssignment(lessonId, values), "Homework assigned")
+        }
+        onHomeworkAssignmentDownload={getHomeworkAssignmentAttachmentUrl}
       />
     ),
     students: (
