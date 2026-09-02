@@ -45,10 +45,6 @@ export async function getWorkspace() {
     "*, subject:subjects!lessons_subject_id_fkey(name,icon), student:profiles!lessons_student_id_fkey(first_name,last_name), group:groups!lessons_group_id_fkey(name), student_audiences:lesson_students!lesson_students_lesson_id_fkey(student_id,student:profiles!lesson_students_student_id_fkey(first_name,last_name)), group_audiences:lesson_groups!lesson_groups_lesson_id_fkey(group_id,group:groups!lesson_groups_group_id_fkey(name)), records:lesson_student_records(student_id,attendance,homework,homework_note,price_snapshot,currency,billable,paid)";
   const lessonSelectBase =
     "*, subject:subjects!lessons_subject_id_fkey(name,icon), student:profiles!lessons_student_id_fkey(first_name,last_name), group:groups!lessons_group_id_fkey(name), student_audiences:lesson_students!lesson_students_lesson_id_fkey(student_id,student:profiles!lesson_students_student_id_fkey(first_name,last_name)), group_audiences:lesson_groups!lesson_groups_lesson_id_fkey(group_id,group:groups!lesson_groups_group_id_fkey(name)), records:lesson_student_records(student_id,attendance,homework,homework_note,homework_score,price_snapshot,currency,billable,paid)";
-  const lessonSelect =
-    `${lessonSelectBase}, homework_submissions:lesson_homework_submissions(id,student_id,description,attachments,submitted_at,updated_at,student:profiles!lesson_homework_submissions_student_id_fkey(first_name,last_name))`;
-  const lessonSelectLegacy =
-    `${lessonSelectBaseLegacy}, homework_submissions:lesson_homework_submissions(id,student_id,description,attachments,submitted_at,updated_at,student:profiles!lesson_homework_submissions_student_id_fkey(first_name,last_name))`;
   const paymentSelect =
     "*, student:profiles!payments_student_id_fkey(first_name,last_name)";
   const empty = Promise.resolve({ data: [], error: null });
@@ -87,10 +83,10 @@ export async function getWorkspace() {
       teacher
         ? db
             .from("lessons")
-            .select(lessonSelect)
+            .select(lessonSelectBase)
             .eq("teacher_id", user.id)
             .order("starts_at")
-        : db.from("lessons").select(lessonSelect).order("starts_at"),
+        : db.from("lessons").select(lessonSelectBase).order("starts_at"),
       teacher
         ? db
             .from("payments")
@@ -125,26 +121,12 @@ export async function getWorkspace() {
     const legacyLessons = teacher
       ? await db
           .from("lessons")
-          .select(lessonSelectLegacy)
-          .eq("teacher_id", user.id)
-          .order("starts_at")
-      : await db.from("lessons").select(lessonSelectLegacy).order("starts_at");
-    lessons.data = legacyLessons.data;
-    lessons.error = legacyLessons.error;
-  }
-  if (lessons.error && /lesson_homework_submissions|schema cache|relationship/i.test(lessons.error.message)) {
-    const fallbackLessons = teacher
-      ? await db
-          .from("lessons")
           .select(lessonSelectBaseLegacy)
           .eq("teacher_id", user.id)
           .order("starts_at")
       : await db.from("lessons").select(lessonSelectBaseLegacy).order("starts_at");
-    lessons.data = (fallbackLessons.data || []).map((lesson) => ({
-      ...lesson,
-      homework_submissions: [],
-    }));
-    lessons.error = fallbackLessons.error;
+    lessons.data = legacyLessons.data;
+    lessons.error = legacyLessons.error;
   }
   for (const result of [
     students,
@@ -160,6 +142,13 @@ export async function getWorkspace() {
     .from("lesson_homework_assignments")
     .select("id,lesson_id,description,attachments,assigned_at,updated_at")
     .order("updated_at", { ascending: false });
+  if (
+    homeworkAssignments.error &&
+    /lesson_homework_assignments|schema cache|Could not find the table/i.test(homeworkAssignments.error.message)
+  ) {
+    homeworkAssignments.data = [];
+    homeworkAssignments.error = null;
+  }
   if (homeworkAssignments.error) throw homeworkAssignments.error;
   const assignmentsByLesson = new Map();
   for (const assignment of homeworkAssignments.data || []) {
@@ -168,10 +157,29 @@ export async function getWorkspace() {
     }
     assignmentsByLesson.get(assignment.lesson_id).push(assignment);
   }
+  const homeworkSubmissions = await db
+    .from("lesson_homework_submissions")
+    .select("id,lesson_id,student_id,description,attachments,submitted_at,updated_at,student:profiles!lesson_homework_submissions_student_id_fkey(first_name,last_name)")
+    .order("updated_at", { ascending: false });
+  if (
+    homeworkSubmissions.error &&
+    /lesson_homework_submissions|schema cache|relationship|Could not find the table/i.test(homeworkSubmissions.error.message)
+  ) {
+    homeworkSubmissions.data = [];
+    homeworkSubmissions.error = null;
+  }
+  if (homeworkSubmissions.error) throw homeworkSubmissions.error;
+  const submissionsByLesson = new Map();
+  for (const submission of homeworkSubmissions.data || []) {
+    if (!submissionsByLesson.has(submission.lesson_id)) {
+      submissionsByLesson.set(submission.lesson_id, []);
+    }
+    submissionsByLesson.get(submission.lesson_id).push(submission);
+  }
   lessons.data = (lessons.data || []).map((lesson) => ({
     ...lesson,
     homework_assignment: assignmentsByLesson.get(lesson.id) || [],
-    homework_submissions: lesson.homework_submissions || [],
+    homework_submissions: submissionsByLesson.get(lesson.id) || [],
   }));
   return {
     user,
@@ -360,6 +368,32 @@ export async function getHomeworkAttachmentUrl(path) {
     .createSignedUrl(path, 60);
   if (error) throw error;
   return data.signedUrl;
+}
+
+export async function deleteLessonHomeworkSubmission(submissionId) {
+  const db = requireClient();
+  const { data: submission, error: loadError } = await db
+    .from("lesson_homework_submissions")
+    .select("id,attachments")
+    .eq("id", submissionId)
+    .single();
+  if (loadError) throw loadError;
+
+  const paths = (submission.attachments || [])
+    .map((attachment) => attachment.path)
+    .filter(Boolean);
+  if (paths.length) {
+    const { error: storageError } = await db.storage
+      .from("homework-submissions")
+      .remove(paths);
+    if (storageError) throw storageError;
+  }
+
+  const { error: deleteError } = await db
+    .from("lesson_homework_submissions")
+    .delete()
+    .eq("id", submission.id);
+  if (deleteError) throw deleteError;
 }
 
 export async function saveLessonHomeworkAssignment(lessonId, { description = "", files = [] }) {

@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { createPortal } from "react-dom";
 import { isSupabaseConfigured, supabase } from "./lib/supabase";
 import {
   createGroup,
@@ -20,6 +21,7 @@ import {
   resetStudentPassword,
   updateRedZone,
   deleteRedZone,
+  deleteLessonHomeworkSubmission,
   getHomeworkAssignmentAttachmentUrl,
   getHomeworkAttachmentUrl,
   saveLessonHomeworkAssignment,
@@ -448,12 +450,12 @@ function Schedule({ sessions, onCreate, students, subjects, groups }) {
 }
 
 function ModalShell({ title, onClose, children }) {
-  return (
+  return createPortal(
     <div
-      className="fixed inset-0 z-50 grid place-items-center overflow-y-auto bg-black/30 p-3 backdrop-blur-[2px] sm:p-4"
+      className="fixed inset-0 z-[1000] grid min-h-dvh place-items-center bg-black/30 p-3 backdrop-blur-[2px] sm:p-4"
       onMouseDown={(e) => e.target === e.currentTarget && onClose()}
     >
-      <div className="my-auto flex max-h-[calc(100dvh-24px)] w-full max-w-lg flex-col overflow-hidden rounded-[22px] bg-[#fbfaf7] shadow-2xl animate-in sm:max-h-[calc(100dvh-32px)] sm:rounded-[26px]">
+      <div className="flex max-h-[calc(100dvh-24px)] w-full max-w-lg flex-col overflow-hidden rounded-[22px] bg-[#fbfaf7] shadow-2xl sm:max-h-[calc(100dvh-32px)] sm:rounded-[26px]">
         <div className="flex shrink-0 items-center justify-between gap-3 border-b border-[#ebe7dc] px-4 py-4 sm:px-6">
           <h2 className="min-w-0 truncate text-lg font-semibold sm:text-xl">{title}</h2>
           <button
@@ -466,7 +468,8 @@ function ModalShell({ title, onClose, children }) {
         </div>
         <div className="min-h-0 overflow-y-auto p-4 sm:p-6">{children}</div>
       </div>
-    </div>
+    </div>,
+    document.body,
   );
 }
 const Field = ({ label, children }) => (
@@ -1756,7 +1759,7 @@ function homeworkStatusForLesson(lesson) {
   };
 }
 
-function HomeworkSubmissionBox({ lesson, onSubmit }) {
+function HomeworkSubmissionBox({ lesson, onSubmit, onDelete }) {
   const existing = lesson.homework_submissions?.[0];
   const [description, setDescription] = useState(existing?.description || "");
   const [files, setFiles] = useState([]);
@@ -1778,6 +1781,19 @@ function HomeworkSubmissionBox({ lesson, onSubmit }) {
       setFiles([]);
     } catch (submitError) {
       setError(submitError.message);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const remove = async () => {
+    if (!existing || !confirm("Delete this homework submission?")) return;
+    setSaving(true);
+    setError("");
+    try {
+      await onDelete(existing.id);
+    } catch (deleteError) {
+      setError(deleteError.message);
     } finally {
       setSaving(false);
     }
@@ -1855,12 +1871,24 @@ function HomeworkSubmissionBox({ lesson, onSubmit }) {
         </div>
       )}
       {error && <p className="mt-2 text-xs font-semibold text-[#a35645]">{error}</p>}
-      <button
-        disabled={saving || (!description.trim() && files.length === 0)}
-        className="mt-3 h-10 w-full rounded-xl border-0 bg-[#30312d] text-xs font-bold text-white disabled:opacity-45"
-      >
-        {saving ? "Uploading..." : existing ? "Update homework" : "Submit homework"}
-      </button>
+      <div className="mt-3 grid gap-2 sm:grid-cols-[1fr_auto]">
+        <button
+          disabled={saving || (!description.trim() && files.length === 0)}
+          className="h-10 rounded-xl border-0 bg-[#30312d] px-4 text-xs font-bold text-white disabled:opacity-45"
+        >
+          {saving ? "Uploading..." : existing ? "Update homework" : "Submit homework"}
+        </button>
+        {existing && (
+          <button
+            type="button"
+            onClick={remove}
+            disabled={saving}
+            className="h-10 rounded-xl border border-[#dabfb6] bg-[#f6ebe7] px-4 text-xs font-bold text-[#995848] disabled:opacity-45"
+          >
+            Delete
+          </button>
+        )}
+      </div>
     </form>
   );
 }
@@ -1952,7 +1980,7 @@ function HomeworkAssignmentBox({ lesson }) {
   );
 }
 
-function StudentDashboard({ data, setPage, onHomeworkSubmit }) {
+function StudentDashboard({ data, setPage, onHomeworkSubmit, onHomeworkDelete }) {
   const now = new Date();
   const current = data.lessons.find(
     (lesson) =>
@@ -2093,7 +2121,11 @@ function StudentDashboard({ data, setPage, onHomeworkSubmit }) {
                   </div>
                 </div>
                 <HomeworkAssignmentBox lesson={lesson} />
-                <HomeworkSubmissionBox lesson={lesson} onSubmit={onHomeworkSubmit} />
+                <HomeworkSubmissionBox
+                  lesson={lesson}
+                  onSubmit={onHomeworkSubmit}
+                  onDelete={onHomeworkDelete}
+                />
               </div>
             ))}
           </div>
@@ -2502,6 +2534,9 @@ export default function App() {
         setPage={navigate}
         onHomeworkSubmit={(lessonId, values) =>
           act(() => submitLessonHomework(lessonId, values), "Homework submitted")
+        }
+        onHomeworkDelete={(submissionId) =>
+          act(() => deleteLessonHomeworkSubmission(submissionId), "Homework deleted")
         }
       />
     ),
