@@ -450,20 +450,21 @@ function Schedule({ sessions, onCreate, students, subjects, groups }) {
 function ModalShell({ title, onClose, children }) {
   return (
     <div
-      className="fixed inset-0 z-50 bg-black/30 backdrop-blur-[2px] grid place-items-center p-4"
+      className="fixed inset-0 z-50 grid place-items-center overflow-y-auto bg-black/30 p-3 backdrop-blur-[2px] sm:p-4"
       onMouseDown={(e) => e.target === e.currentTarget && onClose()}
     >
-      <div className="w-full max-w-lg bg-[#fbfaf7] rounded-[26px] shadow-2xl p-6 animate-in">
-        <div className="flex justify-between items-center mb-6">
-          <h2 className="text-xl font-semibold">{title}</h2>
+      <div className="my-auto flex max-h-[calc(100dvh-24px)] w-full max-w-lg flex-col overflow-hidden rounded-[22px] bg-[#fbfaf7] shadow-2xl animate-in sm:max-h-[calc(100dvh-32px)] sm:rounded-[26px]">
+        <div className="flex shrink-0 items-center justify-between gap-3 border-b border-[#ebe7dc] px-4 py-4 sm:px-6">
+          <h2 className="min-w-0 truncate text-lg font-semibold sm:text-xl">{title}</h2>
           <button
+            type="button"
             onClick={onClose}
-            className="w-9 h-9 rounded-full border-0 bg-[#eeece6] grid place-items-center"
+            className="grid h-9 w-9 shrink-0 place-items-center rounded-full border-0 bg-[#eeece6]"
           >
             <Icon>close</Icon>
           </button>
         </div>
-        {children}
+        <div className="min-h-0 overflow-y-auto p-4 sm:p-6">{children}</div>
       </div>
     </div>
   );
