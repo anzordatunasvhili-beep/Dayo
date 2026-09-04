@@ -41,6 +41,7 @@ const Icon = ({ children, size = 20 }) => (
 const nav = [
   ["dashboard", "space_dashboard", "Overview"],
   ["schedule", "calendar_month", "Schedule"],
+  ["homework", "assignment_turned_in", "Homework"],
   ["students", "group", "Students"],
   ["payments", "account_balance_wallet", "Payments"],
   ["subjects", "menu_book", "Subjects & groups"],
@@ -74,7 +75,9 @@ const colorMap = {
 
 function Sidebar({ page, setPage, open, setOpen, profile, paymentsDue }) {
   const visibleNav =
-    profile?.role === "student" ? nav.filter(([id]) => id !== "students") : nav;
+    profile?.role === "student"
+      ? nav.filter(([id]) => !["homework", "students"].includes(id))
+      : nav;
   return (
     <aside
       className={`${open ? "translate-x-0" : "-translate-x-full"} lg:translate-x-0 fixed lg:static inset-y-0 left-0 z-40 w-[260px] bg-[#f5f3ee] border-r border-[#deddd7] flex flex-col transition-transform`}
@@ -1759,6 +1762,18 @@ function homeworkStatusForLesson(lesson) {
   };
 }
 
+function studentsForLesson(lesson, students, groups) {
+  const direct = (lesson.student_audiences || []).map((item) => item.student_id);
+  if (lesson.student_id) direct.push(lesson.student_id);
+  const groupIds = (lesson.group_audiences || []).map((item) => item.group_id);
+  if (lesson.group_id) groupIds.push(lesson.group_id);
+  const memberIds = groups
+    .filter((group) => groupIds.includes(group.id))
+    .flatMap((group) => (group.members || []).map((member) => member.student_id));
+  const ids = [...new Set([...direct, ...memberIds])];
+  return students.filter((student) => ids.includes(student.id));
+}
+
 function HomeworkSubmissionBox({ lesson, onSubmit, onDelete }) {
   const existing = lesson.homework_submissions?.[0];
   const [description, setDescription] = useState(existing?.description || "");
@@ -1972,6 +1987,197 @@ function HomeworkAssignmentBox({ lesson }) {
                   </button>
                 ))}
               </div>
+            )}
+          </div>
+        </ModalShell>
+      )}
+    </div>
+  );
+}
+
+function TeacherHomework({ lessons, students, groups }) {
+  const [selectedLesson, setSelectedLesson] = useState(null);
+  const [selectedSubmission, setSelectedSubmission] = useState(null);
+  const [error, setError] = useState("");
+  const sortedLessons = [...lessons].sort(
+    (a, b) => new Date(b.starts_at) - new Date(a.starts_at),
+  );
+
+  const download = async (attachment) => {
+    try {
+      setError("");
+      const url = await getHomeworkAttachmentUrl(attachment.path);
+      window.open(url, "_blank", "noopener,noreferrer");
+    } catch (downloadError) {
+      setError(downloadError.message);
+    }
+  };
+
+  const submissionFor = (lesson, studentId) =>
+    (lesson.homework_submissions || []).find(
+      (submission) => submission.student_id === studentId,
+    );
+
+  const lessonRows = sortedLessons.map((lesson) => {
+    const audience = studentsForLesson(lesson, students, groups);
+    const submissions = lesson.homework_submissions || [];
+    return {
+      lesson,
+      audience,
+      submittedCount: submissions.filter(
+        (submission) =>
+          submission.description?.trim() || submission.attachments?.length,
+      ).length,
+    };
+  });
+
+  return (
+    <div className="mx-auto max-w-[1200px] p-5 md:p-8 animate-in">
+      <div className="mb-5">
+        <h1 className="text-2xl font-semibold">Homework</h1>
+        <p className="mt-1 text-sm text-[#888982]">
+          Check each lesson and open student submissions in one place.
+        </p>
+      </div>
+      {error && (
+        <p className="mb-3 rounded-xl bg-[#f3e3de] p-3 text-xs font-semibold text-[#a35645]">
+          {error}
+        </p>
+      )}
+      {lessonRows.length ? (
+        <div className="overflow-hidden rounded-[24px] border border-[#e7e4dd] bg-white">
+          {lessonRows.map(({ lesson, audience, submittedCount }) => (
+            <button
+              key={lesson.id}
+              type="button"
+              onClick={() => setSelectedLesson(lesson)}
+              className="flex w-full items-center gap-3 border-0 border-b border-[#efede8] bg-white px-4 py-4 text-left last:border-b-0 hover:bg-[#fbfaf7] sm:px-6"
+            >
+              <div className="grid h-11 w-11 shrink-0 place-items-center rounded-xl bg-[#e2ebe5]">
+                <Icon size={20}>{lesson.subject?.icon || "assignment"}</Icon>
+              </div>
+              <div className="min-w-0 flex-1">
+                <p className="truncate text-sm font-semibold">
+                  {lesson.subject?.name || "Lesson"}
+                </p>
+                <p className="mt-1 text-xs text-[#999]">
+                  {new Date(lesson.starts_at).toLocaleString([], {
+                    weekday: "short",
+                    month: "short",
+                    day: "numeric",
+                    hour: "2-digit",
+                    minute: "2-digit",
+                  })}
+                </p>
+              </div>
+              <div className="hidden text-right text-xs text-[#77786f] sm:block">
+                <p className="font-semibold text-[#30312d]">
+                  {submittedCount}/{audience.length} uploaded
+                </p>
+                <p className="mt-1">
+                  {(lesson.homework_submissions || []).reduce(
+                    (sum, submission) => sum + (submission.attachments?.length || 0),
+                    0,
+                  )}{" "}
+                  file(s)
+                </p>
+              </div>
+              <Icon size={18}>chevron_right</Icon>
+            </button>
+          ))}
+        </div>
+      ) : (
+        <Empty text="No lessons yet." />
+      )}
+      {selectedLesson && (
+        <ModalShell title="Student homework" onClose={() => setSelectedLesson(null)}>
+          {(() => {
+            const audience = studentsForLesson(selectedLesson, students, groups);
+            return audience.length ? (
+              <div className="space-y-2">
+                {audience.map((student) => {
+                  const submission = submissionFor(selectedLesson, student.id);
+                  const uploaded = Boolean(
+                    submission?.description?.trim() || submission?.attachments?.length,
+                  );
+                  return (
+                    <button
+                      key={student.id}
+                      type="button"
+                      disabled={!uploaded}
+                      onClick={() => setSelectedSubmission(submission)}
+                      className="flex w-full items-center gap-3 rounded-xl border border-[#efede8] bg-white px-3 py-3 text-left disabled:cursor-default disabled:opacity-65"
+                    >
+                      <div className="grid h-9 w-9 shrink-0 place-items-center rounded-xl bg-[#f1efe9] text-xs font-bold">
+                        {student.first_name?.[0]}
+                        {student.last_name?.[0]}
+                      </div>
+                      <div className="min-w-0 flex-1">
+                        <p className="truncate text-sm font-semibold">
+                          {student.first_name} {student.last_name}
+                        </p>
+                        <p className="mt-0.5 text-xs text-[#999]">
+                          {uploaded
+                            ? `${submission.attachments?.length || 0} file(s) uploaded`
+                            : "No upload yet"}
+                        </p>
+                      </div>
+                      <span
+                        className={`rounded-full px-2 py-1 text-[10px] font-bold ${
+                          uploaded
+                            ? "bg-[#e2ebe5] text-[#52735d]"
+                            : "bg-[#f3e3de] text-[#a35645]"
+                        }`}
+                      >
+                        {uploaded ? "Uploaded" : "Missing"}
+                      </span>
+                    </button>
+                  );
+                })}
+              </div>
+            ) : (
+              <Empty text="No students are assigned to this lesson." />
+            );
+          })()}
+        </ModalShell>
+      )}
+      {selectedSubmission && (
+        <ModalShell
+          title={`${selectedSubmission.student?.first_name || "Student"} ${selectedSubmission.student?.last_name || ""}`}
+          onClose={() => setSelectedSubmission(null)}
+        >
+          <div className="space-y-3">
+            <div className="rounded-2xl border border-[#e1e6df] bg-[#f7faf7] p-4">
+              <p className="mb-2 text-xs font-bold text-[#30312d]">Student notes</p>
+              {selectedSubmission.description ? (
+                <p className="whitespace-pre-wrap text-sm leading-6 text-[#595a53]">
+                  {selectedSubmission.description}
+                </p>
+              ) : (
+                <p className="text-sm text-[#999]">No written notes.</p>
+              )}
+            </div>
+            {selectedSubmission.attachments?.length ? (
+              <div className="space-y-2">
+                {selectedSubmission.attachments.map((attachment) => (
+                  <button
+                    key={attachment.path}
+                    type="button"
+                    onClick={() => download(attachment)}
+                    className="flex w-full items-center gap-2 rounded-xl border border-[#efede8] bg-white px-3 py-3 text-left text-xs font-semibold text-[#595a53]"
+                  >
+                    <Icon size={17}>description</Icon>
+                    <span className="min-w-0 flex-1 truncate">
+                      {attachment.relative_path || attachment.name}
+                    </span>
+                    <span className="shrink-0 text-[#999a92]">
+                      {formatFileSize(attachment.size)}
+                    </span>
+                  </button>
+                ))}
+              </div>
+            ) : (
+              <Empty text="No files attached." />
             )}
           </div>
         </ModalShell>
@@ -2471,6 +2677,13 @@ export default function App() {
           act(() => saveLessonHomeworkAssignment(lessonId, values), "Homework assigned")
         }
         onHomeworkAssignmentDownload={getHomeworkAssignmentAttachmentUrl}
+      />
+    ),
+    homework: (
+      <TeacherHomework
+        lessons={data.lessons}
+        students={data.students}
+        groups={data.groups}
       />
     ),
     students: (
