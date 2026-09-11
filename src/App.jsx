@@ -2567,14 +2567,59 @@ export default function App() {
       setSession(null);
       return;
     }
-    supabase.auth.getSession().then(({ data }) => setSession(data.session));
+    let active = true;
+    let authEventReceived = false;
+    let refreshTimer;
+
+    const keepSessionFresh = (currentSession) => {
+      window.clearTimeout(refreshTimer);
+      if (!currentSession?.expires_at) return;
+
+      const refreshIn = Math.max(
+        currentSession.expires_at * 1000 - Date.now() - 2 * 60 * 1000,
+        1000,
+      );
+      refreshTimer = window.setTimeout(async () => {
+        const { data: refreshed, error: refreshError } =
+          await supabase.auth.refreshSession();
+        if (!active) return;
+        if (refreshError) {
+          // A temporary network failure should not immediately throw the student
+          // back to the login screen. Supabase will retry when the tab is active.
+          refreshTimer = window.setTimeout(
+            () => keepSessionFresh(currentSession),
+            30 * 1000,
+          );
+          return;
+        }
+        if (refreshed.session) {
+          setSession(refreshed.session);
+          keepSessionFresh(refreshed.session);
+        }
+      }, refreshIn);
+    };
+
     const {
       data: { subscription },
-    } = supabase.auth.onAuthStateChange((_event, next) => {
+    } = supabase.auth.onAuthStateChange((event, next) => {
+      if (!active) return;
+      authEventReceived = true;
       setSession(next);
-      if (!next) setData(null);
+      keepSessionFresh(next);
+      if (event === "SIGNED_OUT") setData(null);
     });
-    return () => subscription.unsubscribe();
+    supabase.auth.getSession().then(({ data: authData }) => {
+      // A sign-in can finish while this initial read is in flight. Never let its
+      // older snapshot replace a newer auth event with a null session.
+      if (!active || authEventReceived) return;
+      setSession(authData.session);
+      keepSessionFresh(authData.session);
+    });
+    return () => {
+      active = false;
+      window.clearTimeout(refreshTimer);
+      subscription.unsubscribe();
+    };
   }, []);
   const refresh = useCallback(async () => {
     if (!session) return;
